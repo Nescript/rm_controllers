@@ -122,45 +122,63 @@ void BipedalController::clearStatus()
 
 void BipedalController::updateEstimation(const ros::Time& time, const ros::Duration& period)
 {
-  geometry_msgs::Vector3 gyro, acc;
-  gyro.x = imu_handle_.getAngularVelocity()[0];
-  gyro.y = imu_handle_.getAngularVelocity()[1];
-  gyro.z = imu_handle_.getAngularVelocity()[2];
-  acc.x = imu_handle_.getLinearAcceleration()[0];
-  acc.y = imu_handle_.getLinearAcceleration()[1];
-  acc.z = imu_handle_.getLinearAcceleration()[2];
+  geometry_msgs::Vector3 angular_vel_imu, linear_acc_imu;
+  angular_vel_imu.x = imu_handle_.getAngularVelocity()[0];
+  angular_vel_imu.y = imu_handle_.getAngularVelocity()[1];
+  angular_vel_imu.z = imu_handle_.getAngularVelocity()[2];
+  linear_acc_imu.x = imu_handle_.getLinearAcceleration()[0];
+  linear_acc_imu.y = imu_handle_.getLinearAcceleration()[1];
+  linear_acc_imu.z = imu_handle_.getLinearAcceleration()[2];
+  // 读取imu的信息
+
   tf2::Transform odom2imu, imu2base, odom2base;
+  // 准备变换
+
   geometry_msgs::Vector3 angular_vel_base{}, linear_acc_base{};
   double roll{}, pitch{}, yaw{};
   try
   {
-    tf2::doTransform(gyro, angular_vel_base,
+    tf2::doTransform(angular_vel_imu, angular_vel_base,
                      robot_state_handle_.lookupTransform("base_link", imu_handle_.getFrameId(), time));
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg = robot_state_handle_.lookupTransform(imu_handle_.getFrameId(), "base_link", time);
-    tf2::fromMsg(tf_msg.transform, imu2base);
+                    // 这一句是将imu的角速度变换到base_link坐标系,该函数一共三个参数,第一个输入第二个输出,第三个就是应用的变换
+
+    geometry_msgs::TransformStamped imu2base_msg;
+    imu2base_msg = robot_state_handle_.lookupTransform(imu_handle_.getFrameId(), "base_link", time);
+    // 这里用msg类型是因为lookupTransform拿到的就是消息类型，所以下一句根据msg建立对应的tf类型
+
+    tf2::fromMsg(imu2base_msg.transform, imu2base);
     tf2::Quaternion odom2imu_quaternion;
     tf2::Vector3 odom2imu_origin;
     odom2imu_quaternion.setValue(imu_handle_.getOrientation()[0], imu_handle_.getOrientation()[1],
                                  imu_handle_.getOrientation()[2], imu_handle_.getOrientation()[3]);
+                                 // 这里imu的旋转就是imu相对于odom的旋转，即odom2imu（odom经过这样的旋转变成imu的位姿）
     odom2imu_origin.setValue(0, 0, 0);
+    // 假设原点不偏移
     odom2imu.setOrigin(odom2imu_origin);
     odom2imu.setRotation(odom2imu_quaternion);
+    // 一个Transform包含原点偏移和旋转两个部分，这里分别填充，使得odom2imu成为了一个可用的变换
     odom2base = odom2imu * imu2base;
+    // 叠加变换得到odom2base
     quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
-
-    tf_msg.transform = tf2::toMsg(odom2imu.inverse());
-    tf_msg.header.stamp = time;
-    tf2::doTransform(acc, linear_acc_base, tf_msg);
+    // 现在提取出 roll pitch 和 yaw. 注意考虑到变换的含义
+    
+    geometry_msgs::TransformStamped imu2odom_msg;
+    imu2odom_msg.transform = tf2::toMsg(odom2imu.inverse());
+    imu2odom_msg.header.stamp = time;
+    tf2::doTransform(linear_acc_imu, linear_acc_base, imu2odom_msg);
+    // 这里将imu的线加速度变换到base_link坐标系（实际上是odom坐标系，可以理解为我们将机体作为一个质点，在空间中的线加速度）
 
     tf2::Vector3 z_body(0, 0, 1);
     tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
+    // 这里构建了base_link坐标系下的z轴向量，然后旋转到世界坐标系下看朝向判断机身状态
     overturn_ = (abs(pitch) > 0.65 || abs(roll) > 0.4) && z_world.z() < 0.0;
+    // 翻转判断标志：pitch倾斜约37.2度，roll倾斜约23.1度，或者z翻转大于180度
   }
   catch (tf2::TransformException& ex)
   {
     ROS_WARN("%s", ex.what());
     setJointCommands(joint_handles_, { 0, 0, { 0., 0. } }, { 0, 0, { 0., 0. } });
+    // 转换出现问题就直接发布全 0 指令防止疯车
     return;
   }
 
@@ -171,7 +189,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   left_angle[1] = left_knee_joint_handle_.getPosition();
   right_angle[0] = right_hip_joint_handle_.getPosition() + M_PI;
   right_angle[1] = right_knee_joint_handle_.getPosition();
-
+  // 将电机角度转换成 vmc 坐标系角度
   // gazebo
   //  left_angle[0] = left_hip_joint_handle_.getPosition() + M_PI_2;
   //  left_angle[1] = left_knee_joint_handle_.getPosition() - M_PI_2;
@@ -185,6 +203,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
                 left_angle[1], left_spd);
   vmc_->leg_spd(right_hip_joint_handle_.getVelocity(), right_knee_joint_handle_.getVelocity(), right_angle[0],
                 right_angle[1], right_spd);
+                // leg_spd 得到的是摆杆的角速度，上面 leg_pos 得到的的是摆杆的角度。上面四句就是计算摆杆角度和角速度
   left_leg_angle_vel_lpFilterPtr_->input(left_spd[1]);
   right_leg_angle_vel_lpFilterPtr_->input(right_spd[1]);
   //  left_leg_angle_lpFilterPtr_->input(left_pos[1]);
@@ -194,22 +213,29 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   //  right_pos[1] = right_leg_angle_lpFilterPtr_->output();
   left_spd[1] = left_leg_angle_vel_lpFilterPtr_->output();
   right_spd[1] = right_leg_angle_vel_lpFilterPtr_->output();
+  // 得到的角速度又过了一次卡尔曼滤波再应用输出
 
-  // Slippage_detection
+  // Slippage_detection 打滑检测 这里计算的原理参考论文 轮腿式平衡机器人控制 1.6 速度解算部分
+  // 用轮子自己的角速度，机身pitch角速度，摆杆的角速度组合算出 驱动轮相对于大地的角速度
   leftWheelVel = (left_wheel_joint_handle_.getVelocity() + angular_vel_base.y + left_spd[1]) * wheel_radius_;
   rightWheelVel = (right_wheel_joint_handle_.getVelocity() + angular_vel_base.y + right_spd[1]) * wheel_radius_;
   leftWheelVelAbsolute =
       leftWheelVel + left_pos[0] * left_spd[1] * cos(left_pos[1] + pitch_) + left_spd[0] * sin(left_pos[1] + pitch_);
-  rightWheelVelAbsolute = rightWheelVel + right_pos[0] * right_spd[1] * cos(right_pos[1] + pitch_) +
-                          right_spd[0] * sin(right_pos[1] + pitch_);
+  rightWheelVelAbsolute = 
+      rightWheelVel + right_pos[0] * right_spd[1] * cos(right_pos[1] + pitch_) + right_spd[0] * sin(right_pos[1] + pitch_);
+      // 这里right_spd[0]是摆杆伸缩速度，right_spd[1]是摆杆角速度
 
   double wheel_vel_aver = (leftWheelVelAbsolute + rightWheelVelAbsolute) / 2.;
+  // 用两个轮子速度取平均得到向机体正前方的速度
   R_(0, 0) = slip_flag_ ? slip_R_wheel_ : R_wheel_;
-  if (i >= sample_times_)
+  // 这里是判断是否打滑，给雅可比矩阵不同的R输入
+
+  if (i >= sample_times_) // 这里设置了一个采样时间，每3次循环采样一次
   {  // oversampling
     i = 0;
     X_(0) = wheel_vel_aver;
     X_(1) = linear_acc_base.x;
+    // 用上面解算的速度和imu的加速度输入卡尔曼滤波
     kalmanFilterPtr_->predict(U_);
     kalmanFilterPtr_->update(X_, R_);
   }
@@ -218,19 +244,23 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     kalmanFilterPtr_->predict(U_);
     i++;
   }
-  auto x_hat_vel = kalmanFilterPtr_->getState();
-  slip_flag_ = abs(x_hat_vel(0) - wheel_vel_aver) > 3.0;
-
+  auto x_hat_vel = kalmanFilterPtr_->getState(); // 得到卡尔曼滤波预测的车辆速度
+  slip_flag_ = abs(x_hat_vel(0) - wheel_vel_aver) > 3.0; // 预测速度和解算速度的差值超过3.0则判断为打滑
+  // 读到这里应该思考，判断打滑之后不同的R会带来什么样的不同
   // update state
   x_left_[3] = state_ != RAW ? x_hat_vel(0) : 0;
+  // RAW 是陀螺模式，陀螺模式预设是原地旋转，所以不考虑lqr输入位移和速度
   if (abs(x_left_[3]) <= 0.6f && abs(vel_cmd_.x) <= 0.1f)
   {
     x_left_[2] += state_ != RAW ? x_left_[3] * period.toSec() : 0;
   }
+  // 在刹车时候（速度很小且速度指令也很小），追踪速度积分的位移作为lqr那边的输入
   else
   {
     x_left_[2] = -bias_params_->x;
   }
+  // 在匀速时候，设置始终存在一个负数的位移作为误差
+  // 为了前进后退效果相似，考虑增加对速度方向的判断（可否直接适用x_hat的符号？），应用不同的bias x
   x_left_[0] = (left_pos[1] + pitch);
   x_left_[1] = left_spd[1] + angular_vel_base.y;
   x_left_[4] = -pitch;

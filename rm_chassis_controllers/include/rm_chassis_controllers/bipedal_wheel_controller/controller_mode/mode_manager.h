@@ -22,7 +22,7 @@ public:
   virtual ~ModeManager() = default;
   void switchMode(int mode)
   {
-    mode_impl = mode_map_[mode];
+    mode_impl = mode_map_[mode]; // 重要的模式改变是通过mode_impl的切换实现的
   }
   const std::shared_ptr<ModeBase>& getModeImpl()
   {
@@ -30,7 +30,7 @@ public:
   }
 
 private:
-  std::shared_ptr<ModeBase> mode_impl;
+  std::shared_ptr<ModeBase> mode_impl; //指向当前模式的指针
   std::map<int, std::shared_ptr<ModeBase>> mode_map_;
 
   control_toolbox::Pid pid_yaw_vel_, pid_left_leg_, pid_right_leg_, pid_theta_diff_, pid_roll_;
