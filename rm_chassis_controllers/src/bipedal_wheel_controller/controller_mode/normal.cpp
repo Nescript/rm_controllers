@@ -121,8 +121,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   }
   x_left(0) -= controller->getBaseState() != rm_msgs::ChassisCmd::RAW ? bias_params_->theta : bias_params_->raw_theta;
   x_right(0) -= controller->getBaseState() != rm_msgs::ChassisCmd::RAW ? bias_params_->theta : bias_params_->raw_theta;
-  x_left(4) -= bias_params_->pitch;
-  x_right(4) -= bias_params_->pitch;
 
   x_left -= x_left_ref;
   x_right -= x_right_ref;
@@ -135,8 +133,8 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   auto control_params_ = controller->getControlParams();
   //  auto f_spring_force = [](double l) { return ((2094.45f * l - 3091.28f) * l + 1408.375f) * l - 80.91f; };
   double gravity = model_params_->f_gravity,
-         left_spring_force = controller->f_spring_force(left_pos.L0) / cos(left_pos.theta),
-         right_spring_force = controller->f_spring_force(right_pos.L0) / cos(right_pos.theta);
+         left_spring_force = controller->f_spring_force(left_pos.L0) ,
+         right_spring_force = controller->f_spring_force(right_pos.L0) ;
   double F_inertia_left =
       model_params_->M * friction_circle * left_pos.L0 / controller->getChassisGeometryParams()->wheel_track;
   double F_inertia_right =
