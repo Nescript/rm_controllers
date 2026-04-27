@@ -56,9 +56,9 @@ namespace rm_gimbal_controllers
 struct Config
 {
   double resistance_coff_qd_10, resistance_coff_qd_15, resistance_coff_qd_16, resistance_coff_qd_18,
-      resistance_coff_qd_30, g, delay, wait_next_armor_delay, wait_diagonal_armor_delay, dt, timeout,
-      ban_shoot_duration, gimbal_switch_duration, max_switch_angle, min_switch_angle, min_shoot_beforehand_vel,
-      max_chassis_angular_vel, track_rotate_target_delay, track_move_target_delay;
+      resistance_coff_qd_30, g, delay, wait_next_armor_delay, wait_diagonal_armor_delay, dt, timeout, max_switch_angle,
+      min_switch_angle, switch_angle_offset, switch_duration_scale, switch_duration_rate, switch_duration_offset,
+      min_shoot_beforehand_vel, max_chassis_angular_vel, track_rotate_target_delay, track_move_target_delay;
   int min_fit_switch_count;
 };
 
@@ -80,6 +80,7 @@ public:
   {
     return -output_pitch_;
   }
+  double getGimbalSwitchDuration(double v_yaw);
   void getSelectedArmorPosAndVel(geometry_msgs::Point& armor_pos, geometry_msgs::Vector3& armor_vel,
                                  geometry_msgs::Point pos, geometry_msgs::Vector3 vel, double yaw, double v_yaw,
                                  double r1, double r2, double dz, int armors_num);
@@ -103,10 +104,13 @@ private:
   double output_yaw_{}, output_pitch_{};
   double bullet_speed_{}, resistance_coff_{};
   double fly_time_;
+  double switch_hysteresis_;
+  double last_yaw_{}, filtered_yaw_{};
+  double gimbal_switch_duration_{};
   int shoot_beforehand_cmd_{};
   int selected_armor_;
   int count_;
-  bool track_target_;
+  bool track_target_ = true;
   bool identified_target_change_ = true;
   bool is_in_delay_before_switch_{};
   bool dynamic_reconfig_initialized_{};

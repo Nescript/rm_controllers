@@ -112,6 +112,7 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
 
       ctrls_.insert(std::make_pair(axis, std::make_unique<effort_controllers::JointVelocityController>()));
       pid_pos_.insert(std::make_pair(axis, std::make_unique<control_toolbox::Pid>()));
+      pos_des_in_limit_.insert(std::make_pair(axis, true));
       pos_state_pub_.insert(std::make_pair(
           axis, std::make_unique<realtime_tools::RealtimePublisher<rm_msgs::GimbalPosState>>(nh, "pos_state", 1)));
 
@@ -207,7 +208,7 @@ void Controller::setDes(const ros::Time& time, double yaw_des, double pitch_des)
   odom2gimbal_des.setRPY(0, pitch_des, yaw_des);
   tf2::Quaternion base2gimbal_des = odom2base.inverse() * odom2gimbal_des;
   for (const auto& it : joint_urdfs_)
-    pos_des_in_limit_.insert(std::make_pair(it.first, setDesIntoLimit(base2gimbal_des, it.second, base2gimbal_des)));
+    pos_des_in_limit_[it.first] = setDesIntoLimit(base2gimbal_des, it.second, base2gimbal_des);
   odom2gimbal_des_.transform.rotation = tf2::toMsg(odom2base * base2gimbal_des);
   odom2gimbal_des_.header.stamp = time;
   robot_state_handle_.setTransform(odom2gimbal_des_, "rm_gimbal_controllers");
@@ -433,9 +434,22 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
   {
     geometry_msgs::Point target_pos;
     geometry_msgs::Vector3 target_vel;
-    bullet_solver_->getSelectedArmorPosAndVel(target_pos, target_vel, data_track_.position, data_track_.velocity,
-                                              data_track_.yaw, data_track_.v_yaw, data_track_.radius_1,
-                                              data_track_.radius_2, data_track_.dz, data_track_.armors_num);
+    if (data_track_.id != 12)
+    {
+      geometry_msgs::Point pos = data_track_.position;
+      double yaw = data_track_.yaw + data_track_.v_yaw * ((time - data_track_.header.stamp).toSec());
+      pos.x += data_track_.velocity.x * (time - data_track_.header.stamp).toSec();
+      pos.y += data_track_.velocity.y * (time - data_track_.header.stamp).toSec();
+      pos.z += data_track_.velocity.z * (time - data_track_.header.stamp).toSec();
+      bullet_solver_->getSelectedArmorPosAndVel(target_pos, target_vel, pos, data_track_.velocity, yaw,
+                                                data_track_.v_yaw, data_track_.radius_1, data_track_.radius_2,
+                                                data_track_.dz, data_track_.armors_num);
+    }
+    else
+    {
+      target_pos = data_track_.position;
+      target_vel = data_track_.velocity;
+    }
     target_vel.x -= chassis_vel_->linear_->x();
     target_vel.y -= chassis_vel_->linear_->y();
     target_vel.z -= chassis_vel_->linear_->z();
