@@ -11,11 +11,6 @@
 #include <pluginlib/class_list_macros.hpp>
 #include <unsupported/Eigen/MatrixFunctions>
 
-#include "bipedal_wheel_controller/vmc/leg_params.h"
-#include "bipedal_wheel_controller/vmc/leg_conv.h"
-#include "bipedal_wheel_controller/vmc/leg_spd.h"
-#include "bipedal_wheel_controller/vmc/leg_pos.h"
-
 namespace rm_chassis_controllers
 {
 bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh,
@@ -55,16 +50,16 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     legCmd_ = msg->leg_length;
     jumpCmd_ = msg->jump;
   };
-  leg_cmd_sub_ = controller_nh.subscribe<rm_msgs::LegCmd>("/leg_cmd", 10, legCmdCallback);
+  leg_cmd_sub_ = controller_nh.subscribe<rm_msgs::LegCmd>("/leg_cmd", 5, legCmdCallback);
 
   unstick_pub_ = controller_nh.advertise<std_msgs::Bool>("unstick", 1);
   upstair_status_pub_ = controller_nh.advertise<rm_msgs::LeggedUpstairStatus>("upstair_status", 1);
-  legged_chassis_status_pub_.reset((new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>(
-      controller_nh, "legged_chassis_status", 100)));
+  legged_chassis_status_pub_.reset(
+      (new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>(controller_nh, "legged_chassis_status", 1)));
   legged_chassis_mode_pub_.reset(
-      (new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>(controller_nh, "legged_chassis_mode", 10)));
+      (new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>(controller_nh, "legged_chassis_mode", 1)));
   lqr_status_pub_.reset(
-      (new realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>(controller_nh, "lqr_status", 100)));
+      (new realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>(controller_nh, "lqr_status", 1)));
   leg_state_[LEFT].x.setZero();
   leg_state_[RIGHT].x.setZero();
 
@@ -178,18 +173,6 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   //  right_angle[0] = right_hip_joint_handle_.getPosition() + M_PI_2;
   //  right_angle[1] = right_knee_joint_handle_.getPosition() - M_PI_2;
 
-  // [0] is length, [1] is angle
-  //  vmc_->leg_pos(left_angle[0], left_angle[1], left_pos);
-  //  vmc_->leg_pos(right_angle[0], right_angle[1], right_pos);
-  //  vmc_->leg_spd(right_hip_joint_handle_.getVelocity(), right_knee_joint_handle_.getVelocity(), right_angle[0],
-  //                right_angle[1], right_spd);
-  //  vmc_->leg_spd(left_hip_joint_handle_.getVelocity(), left_knee_joint_handle_.getVelocity(), left_angle[0],
-  //                left_angle[1], left_spd);
-  //  vmc_->leg_conv_t(left_hip_joint_handle_.getEffort(), left_knee_joint_handle_.getEffort(), left_angle[0],
-  //                   left_angle[1], left_F_real);
-  //  vmc_->leg_conv_t(right_hip_joint_handle_.getEffort(), right_knee_joint_handle_.getEffort(), right_angle[0],
-  //                   right_angle[1], right_F_real);
-
   // left vmc calc
   leg_state_[LEFT].vmc->calc_jacobian(left_angle[0], left_angle[1]);
   leg_state_[LEFT].vmc->leg_pos(left_angle[0], left_angle[1]);
@@ -237,7 +220,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
 
   // update state
   leg_state_[LEFT].x[3] = state_ != RAW ? x_hat_vel(0) : 0;
-  if (state_ != RAW && abs(leg_state_[LEFT].x[3]) <= 0.5f && abs(vel_cmd_.x) <= 0.1f)
+  if (state_ != RAW && abs(leg_state_[LEFT].x[3]) <= 0.5f && abs(vel_cmd_.x) <= 0.01f)
   {
     leg_state_[LEFT].x[2] += state_ != RAW ? leg_state_[LEFT].x[3] * period.toSec() : 0;
   }
@@ -403,7 +386,7 @@ bool BipedalController::setupLQR(ros::NodeHandle& controller_nh)
   std::vector<Eigen::Matrix<double, CONTROL_DIM, STATE_DIM>> ks;
   for (int i = 10; i < 40; i++)
   {
-    double length = i / 100.;
+    double length = i / 100.0f;
     lengths.push_back(length);
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> a{};
     Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> b{};
@@ -415,7 +398,7 @@ bool BipedalController::setupLQR(ros::NodeHandle& controller_nh)
       return false;
     }
     Eigen::Matrix<double, CONTROL_DIM, STATE_DIM> k = lqr.getK();
-    if (length == 20)
+    if (length == 0.2f)
     {
       std::cout << "A: " << std::endl << a << std::endl;
       std::cout << "B: " << std::endl << b << std::endl;
@@ -459,9 +442,7 @@ bool BipedalController::setupBiasParams(ros::NodeHandle& controller_nh)
 // [will unused]
 bool BipedalController::setupControlParams(ros::NodeHandle& controller_nh)
 {
-  if (!controller_nh.getParam("jumpOverTime", control_params_->jumpOverTime_) ||
-      !controller_nh.getParam("p1", control_params_->p1_) || !controller_nh.getParam("p2", control_params_->p2_) ||
-      !controller_nh.getParam("p3", control_params_->p3_) || !controller_nh.getParam("p4", control_params_->p4_))
+  if (!controller_nh.getParam("jumpOverTime", control_params_->jumpOverTime_))
   {
     ROS_ERROR("Load param fail, check the resist of jump_over_time, p1, p2, p3, p4");
     return false;
@@ -623,11 +604,6 @@ void BipedalController::reconfigCB(rm_chassis_controllers::LQRWeightConfig& conf
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> a{};
     Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> b{};
     generateAB(model_params_, a, b, length);
-    if (length == 20)
-    {
-      std::cout << "A: " << std::endl << a << std::endl;
-      std::cout << "B: " << std::endl << b << std::endl;
-    }
     Lqr<double> lqr(a, b, q_, r_);
     if (!lqr.computeK())
     {
@@ -654,17 +630,17 @@ void BipedalController::reconfigCB(rm_chassis_controllers::LQRWeightConfig& conf
 
 double BipedalController::f_spring_force(double L0)
 {
-    static double l1 = leg_state_[LEFT].vmc->getL1(), l2 = leg_state_[LEFT].vmc->getL2();
-    static double Fs = spring_params_->f_spring, s2 = spring_params_->s2, s3 = spring_params_->s3,
-                  alpha_s = spring_params_->alpha_s;
-    double cos_theta3, theta3, ls, Fv;
-    cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
-    theta3 = acos(cos_theta3);
-    ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
-    Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
-    return Fv;
+  static double l1 = leg_state_[LEFT].vmc->getL1(), l2 = leg_state_[LEFT].vmc->getL2();
+  static double Fs = spring_params_->f_spring, s2 = spring_params_->s2, s3 = spring_params_->s3,
+                alpha_s = spring_params_->alpha_s;
+  double cos_theta3, theta3, ls, Fv;
+  cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
+  theta3 = acos(cos_theta3);
+  ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
+  Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
+  return Fv;
 
-//  return (((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f);
+  //  return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
 }
 
 }  // namespace rm_chassis_controllers
