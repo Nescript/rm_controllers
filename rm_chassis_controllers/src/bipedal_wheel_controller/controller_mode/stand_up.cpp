@@ -72,8 +72,10 @@ void StandUp::execute(const ros::Time& time, const ros::Duration& period)
   setJointCommands(joint_handles_, left_cmd, right_cmd);
 
   // Exit
-  if (((left_pos.theta < 0.3f && left_leg_orientation == LegOrientation::BEHIND)) &&
-      ((right_pos.theta < 0.3f && right_leg_orientation == LegOrientation::BEHIND)))
+  if ((((abs(left_pos.theta) < 0.3f && left_leg_orientation == LegOrientation::BEHIND)) &&
+       ((abs(right_pos.theta) < 0.3f && right_leg_orientation == LegOrientation::BEHIND))) ||
+      ((abs(left_pos.theta) < 0.3f && left_leg_orientation == LegOrientation::UNDER) &&
+       (abs(right_pos.theta) < 0.3f && right_leg_orientation == LegOrientation::UNDER)))
   {
     controller->setMode(BalanceMode::NORMAL);
     controller->setStateChange(false);
@@ -95,12 +97,14 @@ void StandUp::setUpLegMotion(const Eigen::Matrix<double, STATE_DIM, 1>& x, const
   {
     case LegOrientation::UNDER:
       stop_flag = false;
-      legCommand.desired_angle = -M_PI_2;
-      legCommand.desired_length = 0.34;
-      if (leg_length > 0.33)
-      {
-        leg_orientation = LegOrientation::FRONT;
-      }
+      //      legCommand.desired_angle = -M_PI_2;
+      //      legCommand.desired_length = 0.34;
+      //      if (leg_length > 0.33)
+      //      {
+      //        leg_orientation = LegOrientation::FRONT;
+      //      }
+      legCommand.desired_length = 0.12f;
+      legCommand.desired_angle = 0.0f;
       break;
     case LegOrientation::FRONT:
       stop_flag = false;
