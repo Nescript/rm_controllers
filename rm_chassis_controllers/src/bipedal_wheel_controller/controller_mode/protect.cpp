@@ -64,9 +64,9 @@ LogicOutput Protect::execute(const LogicInput& input)
   F_pid_left = std::abs(F_pid_left) > 200 ? std::copysign(200.0, F_pid_left) : F_pid_left;
   F_pid_right = std::abs(F_pid_right) > 200 ? std::copysign(200.0, F_pid_right) : F_pid_right;
   
-  double left_spring_force = f_spring_force(left_pos.L0, model_params_->l, model_params_->l,
+  double left_spring_force = f_spring_force(left_pos.L0, left_leg_state.vmc->getL1(), left_leg_state.vmc->getL2(),
                                            spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
-  double right_spring_force = f_spring_force(right_pos.L0, model_params_->l, model_params_->l,
+  double right_spring_force = f_spring_force(right_pos.L0, right_leg_state.vmc->getL1(), right_leg_state.vmc->getL2(),
                                             spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
 
   left_cmd.force = F_pid_left - left_spring_force;
@@ -98,7 +98,7 @@ LogicOutput Protect::execute(const LogicInput& input)
     output.state_changed_requested = false;
   }
   else if (std::abs(chassis_state.angular_vel.y()) < 0.1 && input.overturn &&
-           input.base_state != 2) // Assume 2 is FALLEN
+           input.base_state != 4) // Assume 4 is FALLEN
   {
     output.state_changed_requested = false;
     output.next_mode = BalanceMode::RECOVER;

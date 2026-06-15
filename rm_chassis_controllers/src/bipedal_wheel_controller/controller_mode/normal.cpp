@@ -160,9 +160,9 @@ LogicOutput Normal::execute(const LogicInput& input)
   // Compute leg thrust
   double wheel_vel_diff = std::abs(input.left_wheel_vel) - std::abs(input.right_wheel_vel);
   double gravity = model_params_->f_gravity;
-  double left_spring_force = f_spring_force(left_pos.L0, model_params_->l, model_params_->l, // Use correct l1, l2 if different
+  double left_spring_force = f_spring_force(left_pos.L0, left_leg_state.vmc->getL1(), left_leg_state.vmc->getL2(),
                                            spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
-  double right_spring_force = f_spring_force(right_pos.L0, model_params_->l, model_params_->l,
+  double right_spring_force = f_spring_force(right_pos.L0, right_leg_state.vmc->getL1(), right_leg_state.vmc->getL2(),
                                             spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
   
   double F_inertia_left =
@@ -335,7 +335,7 @@ LogicOutput Normal::execute(const LogicInput& input)
   }
   if (std::abs(x_left(THETA)) > 1.0 || std::abs(x_right(THETA)) > 1.0 || std::abs(chassis_state.pitch) > 0.6 ||
       std::abs(chassis_state.roll) > 0.8 || input.overturn || std::abs(theta_diff) > 1.0 ||
-      input.base_state == 2) // Assume 2 is FALLEN
+      input.base_state == 4) // Assume 4 is FALLEN
   {
     output.next_mode = BalanceMode::SIT_DOWN;
     output.state_changed_requested = false;
