@@ -46,8 +46,8 @@ LogicOutput Protect::execute(const LogicInput& input)
   left_wheel_desired_vel = vel_cmd_.x_vel_cmd - vel_cmd_.yaw_vel_cmd * chassis_geometry_params->wheel_track;
   right_wheel_desired_vel = vel_cmd_.x_vel_cmd + vel_cmd_.yaw_vel_cmd * chassis_geometry_params->wheel_track;
 
-  length_des_l = length_des_r = 0.11f;
-  theta_des_l = theta_des_r = 0.0f;
+  double length_des_l = 0.11f, length_des_r = 0.11f;
+  double theta_des_l = 0.0f, theta_des_r = 0.0f;
   ramp_length_des_l_->input(length_des_l);
   ramp_angle_des_l_->input(theta_des_l);
   ramp_length_des_r_->input(length_des_r);

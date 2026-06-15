@@ -620,7 +620,7 @@ geometry_msgs::Twist BipedalController::odometry()
   if (mode_manager_->getModeImpl() != nullptr)
   {
     twist.linear.x = chassis_state_.x_vel;
-    twist.angular.z = chassis_state_.angular_vel.z;
+    twist.angular.z = chassis_state_.angular_vel.z();
   }
   else
   {
