@@ -1,25 +1,22 @@
 //
 // Created by wk on 2026/5/13.
 //
+
 #include "bipedal_wheel_controller/controller_mode/protect.h"
-#include "bipedal_wheel_controller/controller.h"
-#include "bipedal_wheel_controller/helper_functions.h"
+#include "bipedal_wheel_controller/math_helpers.h"
 
 namespace rm_chassis_controllers
 {
-Protect::Protect(BipedalControllerInterface* controller_,
-                 const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                 const std::vector<control_toolbox::Pid*>& pid_legs,
-                 const std::vector<control_toolbox::Pid*>& pid_thetas,
-                 const std::vector<control_toolbox::Pid*>& pid_wheels, control_toolbox::Pid* pid_theta_diff,
-                 control_toolbox::Pid* pid_yaw_vel)
-  : ModeBase(controller_)
-  , joint_handles_(joint_handles)
-  , pid_legs_(pid_legs)
-  , pid_thetas_(pid_thetas)
-  , pid_wheels_(pid_wheels)
-  , pid_theta_diff_(pid_theta_diff)
-  , pid_yaw_vel_(pid_yaw_vel)
+Protect::Protect(PidInterface* left_leg, PidInterface* right_leg, PidInterface* left_theta, PidInterface* right_theta,
+                 PidInterface* left_wheel, PidInterface* right_wheel, PidInterface* theta_diff, PidInterface* yaw_vel)
+  : pid_left_leg_(left_leg)
+  , pid_right_leg_(right_leg)
+  , pid_left_theta_(left_theta)
+  , pid_right_theta_(right_theta)
+  , pid_left_wheel_(left_wheel)
+  , pid_right_wheel_(right_wheel)
+  , pid_theta_diff_(theta_diff)
+  , pid_yaw_vel_(yaw_vel)
 {
   double leg_len_acc = 20, leg_theta_acc = 10;
   ramp_length_des_l_ = std::make_shared<RampFilter<double>>(leg_len_acc, 0.001);
@@ -28,25 +25,26 @@ Protect::Protect(BipedalControllerInterface* controller_,
   ramp_angle_des_r_ = std::make_shared<RampFilter<double>>(leg_theta_acc, 0.001);
 }
 
-void Protect::execute(const ros::Time& time, const ros::Duration& period)
+LogicOutput Protect::execute(const LogicInput& input)
 {
-  if (!controller->getStateChange())
+  LogicOutput output;
+  if (!input.state_changed)
   {
-    ROS_INFO("[balance] Enter PROTECT");
-    controller->setStateChange(true);
+    output.state_changed_requested = true;
   }
-  auto& left_leg_state = controller->getLegState(LEFT);
-  auto& right_leg_state = controller->getLegState(RIGHT);
+  const auto& left_leg_state = input.leg_state[LEFT];
+  const auto& right_leg_state = input.leg_state[RIGHT];
   const auto& left_pos = left_leg_state.vmc->getPos();
   const auto& right_pos = right_leg_state.vmc->getPos();
-  const auto& chassis_geometry_params = controller->getChassisGeometryParams();
-  const auto& chassis_state = controller->getChassisState();
+  const auto& chassis_geometry_params = input.chassis_geometry_params;
+  const auto& chassis_state = input.chassis_state;
+  const auto& vel_cmd_ = input.instruction;
+  const auto& model_params_ = input.model_params;
+  const auto& spring_params_ = input.spring_params;
 
   double left_wheel_desired_vel{}, right_wheel_desired_vel{};
-
-  auto vel_cmd_ = controller->getVelCmd();
-  left_wheel_desired_vel = vel_cmd_.x - vel_cmd_.z * chassis_geometry_params->wheel_track;
-  right_wheel_desired_vel = vel_cmd_.x + vel_cmd_.z * chassis_geometry_params->wheel_track;
+  left_wheel_desired_vel = vel_cmd_.x_vel_cmd - vel_cmd_.yaw_vel_cmd * chassis_geometry_params->wheel_track;
+  right_wheel_desired_vel = vel_cmd_.x_vel_cmd + vel_cmd_.yaw_vel_cmd * chassis_geometry_params->wheel_track;
 
   length_des_l = length_des_r = 0.11f;
   theta_des_l = theta_des_r = 0.0f;
@@ -61,40 +59,52 @@ void Protect::execute(const ros::Time& time, const ros::Duration& period)
 
   LegCommand left_cmd{}, right_cmd{};
   double F_pid_left{}, F_pid_right{};
-  F_pid_left = pid_legs_[LEFT]->computeCommand(length_des_l - left_pos.L0, period);
-  F_pid_right = pid_legs_[RIGHT]->computeCommand(length_des_r - right_pos.L0, period);
-  F_pid_left = abs(F_pid_left) > 200 ? std::copysign(1, F_pid_left) * 200 : F_pid_left;
-  F_pid_right = abs(F_pid_right) > 200 ? std::copysign(1, F_pid_right) * 200 : F_pid_right;
-  left_cmd.force = F_pid_left - controller->f_spring_force(left_pos.L0);
-  right_cmd.force = F_pid_right - controller->f_spring_force(right_pos.L0);
-  double T_theta_diff = pid_theta_diff_->computeCommand(right_pos.theta - left_pos.theta, period);
-  left_cmd.torque = pid_thetas_[0]->computeCommand(theta_des_l - left_pos.theta, period) + T_theta_diff;
-  right_cmd.torque = pid_thetas_[1]->computeCommand(theta_des_r - right_pos.theta, period) - T_theta_diff;
-  double T_yaw = pid_yaw_vel_->computeCommand(vel_cmd_.z - chassis_state.angular_vel.z, period);
+  F_pid_left = pid_left_leg_->computeCommand(length_des_l - left_pos.L0, input.period);
+  F_pid_right = pid_right_leg_->computeCommand(length_des_r - right_pos.L0, input.period);
+  F_pid_left = std::abs(F_pid_left) > 200 ? std::copysign(200.0, F_pid_left) : F_pid_left;
+  F_pid_right = std::abs(F_pid_right) > 200 ? std::copysign(200.0, F_pid_right) : F_pid_right;
+  
+  double left_spring_force = f_spring_force(left_pos.L0, model_params_->l, model_params_->l,
+                                           spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
+  double right_spring_force = f_spring_force(right_pos.L0, model_params_->l, model_params_->l,
+                                            spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
+
+  left_cmd.force = F_pid_left - left_spring_force;
+  right_cmd.force = F_pid_right - right_spring_force;
+  double T_theta_diff = pid_theta_diff_->computeCommand(right_pos.theta - left_pos.theta, input.period);
+  left_cmd.torque = pid_left_theta_->computeCommand(theta_des_l - left_pos.theta, input.period) + T_theta_diff;
+  right_cmd.torque = pid_right_theta_->computeCommand(theta_des_r - right_pos.theta, input.period) - T_theta_diff;
+  double T_yaw = pid_yaw_vel_->computeCommand(vel_cmd_.yaw_vel_cmd - chassis_state.angular_vel.z(), input.period);
+  
+  // Need wheel velocities in input
   double left_wheel_cmd =
-      pid_wheels_[0]->computeCommand(left_wheel_desired_vel - joint_handles_[0]->getVelocity(), period) - T_yaw;
+      pid_left_wheel_->computeCommand(left_wheel_desired_vel - input.left_wheel_vel, input.period) - T_yaw;
   double right_wheel_cmd =
-      pid_wheels_[1]->computeCommand(right_wheel_desired_vel - joint_handles_[1]->getVelocity(), period) + T_yaw;
+      pid_right_wheel_->computeCommand(right_wheel_desired_vel - input.right_wheel_vel, input.period) + T_yaw;
 
   left_leg_state.vmc->leg_conv(left_cmd.force, left_cmd.torque, left_cmd.input);
   right_leg_state.vmc->leg_conv(right_cmd.force, right_cmd.torque, right_cmd.input);
 
-  setJointCommands(joint_handles_, left_cmd, right_cmd, left_wheel_cmd, right_wheel_cmd);
+  output.leg_cmd[LEFT] = left_cmd;
+  output.leg_cmd[RIGHT] = right_cmd;
+  output.wheel_cmd[LEFT] = left_wheel_cmd;
+  output.wheel_cmd[RIGHT] = right_wheel_cmd;
+
   // Exit
-  if (abs(chassis_state.pitch) < 0.3f && abs(chassis_state.angular_vel.y) < 0.2f &&
-      abs(left_pos.theta + right_pos.theta) / 2.0f < 0.2f)
+  if (std::abs(chassis_state.pitch) < 0.3f && std::abs(chassis_state.angular_vel.y()) < 0.2f &&
+      std::abs(left_pos.theta + right_pos.theta) / 2.0f < 0.2f)
   {
-    controller->setMode(BalanceMode::NORMAL);
-    controller->setStateChange(false);
-    ROS_INFO("[balance] Exit PROTECT");
+    output.next_mode = BalanceMode::NORMAL;
+    output.state_changed_requested = false;
   }
-  else if (abs(chassis_state.angular_vel.y) < 0.1 && controller->getOverturn() &&
-           controller->getBaseState() != rm_msgs::ChassisCmd::FALLEN)
+  else if (std::abs(chassis_state.angular_vel.y()) < 0.1 && input.overturn &&
+           input.base_state != 2) // Assume 2 is FALLEN
   {
-    controller->setStateChange(false);
-    controller->setMode(BalanceMode::RECOVER);
-    ROS_INFO("[balance] Exit PROTECT");
+    output.state_changed_requested = false;
+    output.next_mode = BalanceMode::RECOVER;
   }
+  
+  return output;
 }
 
 }  // namespace rm_chassis_controllers

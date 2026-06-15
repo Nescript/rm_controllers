@@ -38,7 +38,60 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     return false;
   }
 
-  mode_manager_ = std::make_shared<ModeManager>(this, controller_nh, joint_handles_);
+  // Initialize PIDs
+  const std::pair<const char*, control_toolbox::Pid*> pid_list[] = {
+    { "pid_yaw_vel", &pid_yaw_vel_ },
+    { "pid_left_leg", &pid_left_leg_ },
+    { "pid_right_leg", &pid_right_leg_ },
+    { "pid_theta_diff", &pid_theta_diff_ },
+    { "pid_roll", &pid_roll_ },
+    { "pid_left_leg_theta", &pid_left_leg_theta_ },
+    { "pid_right_leg_theta", &pid_right_leg_theta_ },
+    { "pid_left_leg_theta_vel", &pid_left_leg_theta_vel_ },
+    { "pid_right_leg_theta_vel", &pid_right_leg_theta_vel_ },
+    { "pid_left_wheel_vel", &pid_left_wheel_vel_ },
+    { "pid_right_wheel_vel", &pid_right_wheel_vel_ },
+    { "pid_left_leg_stand_up", &pid_left_leg_stand_up_ },
+    { "pid_right_leg_stand_up", &pid_right_leg_stand_up_ },
+    { "pid_wheel_vel_diff", &pid_wheel_vel_diff_ },
+  };
+  for (const auto& e : pid_list)
+    if (controller_nh.hasParam(e.first) && !e.second->init(ros::NodeHandle(controller_nh, e.first)))
+      ROS_ERROR("Failed to load pid %s", e.first);
+
+  // Initialize wrappers
+  wrapper_yaw_vel_ = std::make_unique<RosPidWrapper>(&pid_yaw_vel_);
+  wrapper_left_leg_ = std::make_unique<RosPidWrapper>(&pid_left_leg_);
+  wrapper_right_leg_ = std::make_unique<RosPidWrapper>(&pid_right_leg_);
+  wrapper_theta_diff_ = std::make_unique<RosPidWrapper>(&pid_theta_diff_);
+  wrapper_roll_ = std::make_unique<RosPidWrapper>(&pid_roll_);
+  wrapper_left_leg_stand_up_ = std::make_unique<RosPidWrapper>(&pid_left_leg_stand_up_);
+  wrapper_right_leg_stand_up_ = std::make_unique<RosPidWrapper>(&pid_right_leg_stand_up_);
+  wrapper_left_leg_theta_ = std::make_unique<RosPidWrapper>(&pid_left_leg_theta_);
+  wrapper_right_leg_theta_ = std::make_unique<RosPidWrapper>(&pid_right_leg_theta_);
+  wrapper_left_leg_theta_vel_ = std::make_unique<RosPidWrapper>(&pid_left_leg_theta_vel_);
+  wrapper_right_leg_theta_vel_ = std::make_unique<RosPidWrapper>(&pid_right_leg_theta_vel_);
+  wrapper_left_wheel_vel_ = std::make_unique<RosPidWrapper>(&pid_left_wheel_vel_);
+  wrapper_right_wheel_vel_ = std::make_unique<RosPidWrapper>(&pid_right_wheel_vel_);
+  wrapper_wheel_vel_diff_ = std::make_unique<RosPidWrapper>(&pid_wheel_vel_diff_);
+
+  PidSet pid_set;
+  pid_set.yaw_vel = wrapper_yaw_vel_.get();
+  pid_set.left_leg = wrapper_left_leg_.get();
+  pid_set.right_leg = wrapper_right_leg_.get();
+  pid_set.theta_diff = wrapper_theta_diff_.get();
+  pid_set.roll = wrapper_roll_.get();
+  pid_set.left_leg_stand_up = wrapper_left_leg_stand_up_.get();
+  pid_set.right_leg_stand_up = wrapper_right_leg_stand_up_.get();
+  pid_set.left_leg_theta = wrapper_left_leg_theta_.get();
+  pid_set.right_leg_theta = wrapper_right_leg_theta_.get();
+  pid_set.left_leg_theta_vel = wrapper_left_leg_theta_vel_.get();
+  pid_set.right_leg_theta_vel = wrapper_right_leg_theta_vel_.get();
+  pid_set.left_wheel_vel = wrapper_left_wheel_vel_.get();
+  pid_set.right_wheel_vel = wrapper_right_wheel_vel_.get();
+  pid_set.wheel_vel_diff = wrapper_wheel_vel_diff_.get();
+
+  mode_manager_ = std::make_shared<ModeManager>(pid_set);
 
   d_srv_ =
       new dynamic_reconfigure::Server<rm_chassis_controllers::LQRWeightConfig>(ros::NodeHandle(controller_nh, "lqr"));
@@ -101,7 +154,55 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     mode_manager_->switchMode(RECOVER);
   }
   updateEstimation(time, period);
-  mode_manager_->getModeImpl()->execute(time, period);
+
+  LogicInput input;
+  input.time = time.toSec();
+  input.period = period.toSec();
+  input.chassis_state = chassis_state_;
+  input.leg_state[LEFT] = leg_state_[LEFT];
+  input.leg_state[RIGHT] = leg_state_[RIGHT];
+  input.instruction.x_vel_cmd = vel_cmd_.x;
+  input.instruction.yaw_vel_cmd = vel_cmd_.z;
+  input.instruction.leg_length_cmd = legCmd_;
+  input.instruction.jump_cmd = jumpCmd_;
+  input.model_params = model_params_;
+  input.control_params = control_params_;
+  input.bias_params = bias_params_;
+  input.leg_threshold_params = leg_threshold_params_;
+  input.chassis_geometry_params = chassis_geometry_params_;
+  input.spring_params = spring_params_;
+  input.left_wheel_vel = left_wheel_joint_handle_.getVelocity();
+  input.right_wheel_vel = right_wheel_joint_handle_.getVelocity();
+  input.base_state = state_;
+  input.overturn = overturn_;
+  input.state_changed = balance_state_changed_;
+  input.complete_stand = complete_stand_;
+  input.move_flag = move_flag_;
+  input.default_leg_length = default_leg_length_;
+  input.coeffs = coeffs_;
+
+  LogicOutput output = mode_manager_->execute(input);
+
+  if (output.next_mode != -1)
+  {
+    balance_mode_ = output.next_mode;
+    mode_manager_->switchMode(balance_mode_);
+  }
+  if (output.state_changed_requested)
+    balance_state_changed_ = true;
+  if (output.complete_stand_requested)
+    complete_stand_ = true;
+  if (output.jump_cmd_requested)
+    jumpCmd_ = true;
+  if (output.move_flag_requested)
+    move_flag_ = true;
+  if (output.clear_status_requested)
+    clearStatus();
+  if (output.recovery_leg_spd_turnback_requested)
+    recovery_leg_spd_turnback_ = true;
+
+  setJointCommands(joint_handles_, output.leg_cmd[LEFT], output.leg_cmd[RIGHT], output.wheel_cmd[LEFT],
+                   output.wheel_cmd[RIGHT]);
   pubState();
 }
 
@@ -147,8 +248,8 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
     overturn_ = (abs(pitch) > 0.65 || abs(roll) > 0.8) && z_world.z() < 0.0;
 
-    chassis_state_.angular_vel = angular_vel_base;
-    chassis_state_.linear_acc = linear_acc_base;
+    chassis_state_.angular_vel << angular_vel_base.x, angular_vel_base.y, angular_vel_base.z;
+    chassis_state_.linear_acc << linear_acc_base.x, linear_acc_base.y, linear_acc_base.z;
     chassis_state_.roll = roll;
     chassis_state_.pitch = pitch;
     chassis_state_.yaw = yaw;

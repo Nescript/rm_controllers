@@ -3,46 +3,43 @@
 //
 
 #include "bipedal_wheel_controller/controller_mode/sit_down.h"
-#include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/math_helpers.h"
 
 namespace rm_chassis_controllers
 {
-SitDown::SitDown(BipedalControllerInterface* controller_,
-                 const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                 const std::vector<control_toolbox::Pid*>& pid_wheels)
-  : ModeBase(controller_), joint_handles_(joint_handles), pid_wheels_(pid_wheels)
+SitDown::SitDown(PidInterface* left_wheel, PidInterface* right_wheel)
+  : pid_left_wheel_(left_wheel), pid_right_wheel_(right_wheel)
 {
 }
 
-void SitDown::execute(const ros::Time& time, const ros::Duration& period)
+LogicOutput SitDown::execute(const LogicInput& input)
 {
-  if (!controller->getStateChange())
+  LogicOutput output;
+  if (!input.state_changed)
   {
-    ROS_INFO("[balance] Enter SIT_DOWN");
-    controller->setStateChange(true);
+    output.state_changed_requested = true;
   }
 
-  auto& chassis_state = controller->getChassisState();
-  //  auto& left_leg_state = controller->getLegState(LEFT);
-  //  auto& right_leg_state = controller->getLegState(RIGHT);
-  LegCommand left_cmd = { 0, 0, { 0., 0. } }, right_cmd = { 0, 0, { 0., 0. } };
-  //  double left_wheel_cmd = pid_wheels_[0]->computeCommand(joint_handles_[0]->getVelocity(), period);
-  //  double right_wheel_cmd = pid_wheels_[1]->computeCommand(joint_handles_[1]->getVelocity(), period);
-  setJointCommands(joint_handles_, left_cmd, right_cmd);
+  const auto& chassis_state = input.chassis_state;
+  output.leg_cmd[LEFT] = { 0, 0, { 0., 0. } };
+  output.leg_cmd[RIGHT] = { 0, 0, { 0., 0. } };
+  output.wheel_cmd[LEFT] = 0.0;
+  output.wheel_cmd[RIGHT] = 0.0;
 
   // Exit
-  if (abs(chassis_state.angular_vel.y) < 0.1 && controller->getBaseState() != rm_msgs::ChassisCmd::FALLEN)
+  if (std::abs(chassis_state.angular_vel.y()) < 0.1 && input.base_state != 2) // Assume 2 is FALLEN
   {
-    controller->setStateChange(false);
-    if (controller->getOverturn())
+    output.state_changed_requested = false;
+    if (input.overturn)
     {
-      controller->setMode(BalanceMode::RECOVER);
+      output.next_mode = BalanceMode::RECOVER;
     }
     else
     {
-      controller->setMode(BalanceMode::STAND_UP);
+      output.next_mode = BalanceMode::STAND_UP;
     }
-    ROS_INFO("[balance] Exit SIT_DOWN");
   }
+  
+  return output;
 }
 }  // namespace rm_chassis_controllers

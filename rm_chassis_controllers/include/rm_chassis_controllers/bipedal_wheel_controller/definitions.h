@@ -5,6 +5,7 @@
 #pragma once
 
 #include "bipedal_wheel_controller/vmc/VMC.h"
+#include <Eigen/Dense>
 #include <array>
 #include <utility>
 
@@ -138,8 +139,8 @@ struct LegState
 
 struct ChassisState
 {
-  geometry_msgs::Vector3 angular_vel;
-  geometry_msgs::Vector3 linear_acc;
+  Eigen::Vector3d angular_vel;
+  Eigen::Vector3d linear_acc;
   double x_vel = 0.0;
   double roll = 0.0;
   double pitch = 0.0;

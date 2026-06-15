@@ -4,24 +4,21 @@
 
 #pragma once
 
-#include <hardware_interface/joint_command_interface.h>
-#include <control_toolbox/pid.h>
+#include <memory>
+#include <vector>
 
 #include "rm_common/filters/filters.h"
-
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
-#include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/pid_interface.h"
 
 namespace rm_chassis_controllers
 {
 class Normal : public ModeBase
 {
 public:
-  Normal(BipedalControllerInterface* controller_, const std::vector<hardware_interface::JointHandle*>& joint_handles,
-         const std::vector<control_toolbox::Pid*>& pid_legs, control_toolbox::Pid* pid_yaw_vel,
-         control_toolbox::Pid* pid_theta_diff, control_toolbox::Pid* pid_roll,
-         control_toolbox::Pid* pid_wheel_vel_diff);
-  void execute(const ros::Time& time, const ros::Duration& period) override;
+  Normal(PidInterface* pid_left_leg, PidInterface* pid_right_leg, PidInterface* pid_yaw_vel,
+         PidInterface* pid_theta_diff, PidInterface* pid_roll, PidInterface* pid_wheel_vel_diff);
+  LogicOutput execute(const LogicInput& input) override;
   const char* name() const override
   {
     return "NORMAL";
@@ -30,16 +27,14 @@ public:
 private:
   double calculateSupportForce(double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
                                Eigen::Matrix<double, STATE_DIM, 1> x, const std::shared_ptr<ModelParams>& model_params,
-                               const ros::Duration& period);
+                               double period);
   bool unstickDetection(const double& F_leg, const double& Tp, const double& leg_len_spd, const double& leg_length,
                         const double& acc_z, const std::shared_ptr<ModelParams>& model_params,
                         Eigen::Matrix<double, STATE_DIM, 1> x,
-                        const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr,
-                        const ros::Duration& period);
-  std::vector<hardware_interface::JointHandle*> joint_handles_;
-  std::vector<control_toolbox::Pid*> pid_legs_;
-  control_toolbox::Pid *pid_yaw_vel_, *pid_theta_diff_, *pid_roll_, *pid_wheel_vel_diff_;
-  ros::Time lastJumpTime_{};
+                        const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr, double period,
+                        double time);
+  PidInterface *pid_left_leg_, *pid_right_leg_, *pid_yaw_vel_, *pid_theta_diff_, *pid_roll_, *pid_wheel_vel_diff_;
+  double lastJumpTime_{ 0.0 };
 
   double pos_des_{ 0.0 }, leg_length_des{ 0.2 };
   double unstick_threshold{ 15.0 };

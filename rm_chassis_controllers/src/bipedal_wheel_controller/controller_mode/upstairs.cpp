@@ -3,50 +3,54 @@
 //
 
 #include "bipedal_wheel_controller/controller_mode/upstairs.h"
-#include "bipedal_wheel_controller/controller.h"
-#include "bipedal_wheel_controller/helper_functions.h"
+#include "bipedal_wheel_controller/math_helpers.h"
 
 namespace rm_chassis_controllers
 {
-Upstairs::Upstairs(BipedalControllerInterface* controller_,
-                   const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                   const std::vector<control_toolbox::Pid*>& pid_legs,
-                   const std::vector<control_toolbox::Pid*>& pid_thetas)
-  : ModeBase(controller_), joint_handles_(joint_handles), pid_legs_(pid_legs), pid_thetas_(pid_thetas)
+Upstairs::Upstairs(PidInterface* pid_left_leg, PidInterface* pid_right_leg, PidInterface* pid_left_theta,
+                   PidInterface* pid_right_theta, PidInterface* pid_left_theta_vel, PidInterface* pid_right_theta_vel)
+  : pid_left_leg_(pid_left_leg)
+  , pid_right_leg_(pid_right_leg)
+  , pid_left_theta_(pid_left_theta)
+  , pid_right_theta_(pid_right_theta)
+  , pid_left_theta_vel_(pid_left_theta_vel)
+  , pid_right_theta_vel_(pid_right_theta_vel)
 {
 }
 
-void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
+LogicOutput Upstairs::execute(const LogicInput& input)
 {
-  auto& left_leg_state = controller->getLegState(LEFT);
-  auto& right_leg_state = controller->getLegState(RIGHT);
-  if (!controller->getStateChange())
+  LogicOutput output;
+  const auto& left_leg_state = input.leg_state[LEFT];
+  const auto& right_leg_state = input.leg_state[RIGHT];
+  if (!input.state_changed)
   {
-    ROS_INFO("[balance] Enter Upstairs");
-    controller->setStateChange(true);
-    controller->setCompleteStand(false);
-    leg_state_threshold_ = controller->getLegThresholdParams();
-    //    vmcPtr_ = controller->getVMCPtr();
-    detectLegState(left_leg_state.x, left_leg_orientation);
-    detectLegState(right_leg_state.x, right_leg_orientation);
+    output.state_changed_requested = true;
+    output.complete_stand_requested = false;
+    detectLegState(left_leg_state.x, left_leg_orientation, input.leg_threshold_params);
+    detectLegState(right_leg_state.x, right_leg_orientation, input.leg_threshold_params);
   }
 
   const auto& left_pos = left_leg_state.vmc->getPos();
   const auto& right_pos = right_leg_state.vmc->getPos();
+  const auto& leg_state_threshold_ = input.leg_threshold_params;
 
   double theta_des_l{ 1.57 }, theta_des_r{ 1.57 }, length_des_l{ 0.18 }, length_des_r{ 0.18 };
-  auto model_params_ = controller->getModelParams();
-  double left_spring_force = -controller->f_spring_force(left_pos.L0),
-         right_spring_force = -controller->f_spring_force(right_pos.L0);
+  auto model_params_ = input.model_params;
+  auto spring_params_ = input.spring_params;
+  double left_spring_force = -f_spring_force(left_pos.L0, model_params_->l, model_params_->l,
+                                            spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
+  double right_spring_force = -f_spring_force(right_pos.L0, model_params_->l, model_params_->l,
+                                             spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);
 
   length_des_l = length_des_r = leg_state_threshold_->upstair_des_length;
   theta_des_l = theta_des_r = leg_state_threshold_->upstair_des_theta;
-  LegCommand left_cmd = { 0, 0, { 0., 0. } }, right_cmd = { 0, 0, { 0., 0. } };
-  left_cmd = computePidLegCommand(length_des_l, theta_des_l, left_leg_state.vmc, *pid_legs_[0], *pid_thetas_[0],
-                                  *pid_thetas_[2], left_leg_orientation, period, left_spring_force);
-  right_cmd = computePidLegCommand(length_des_r, theta_des_r, right_leg_state.vmc, *pid_legs_[1], *pid_thetas_[1],
-                                   *pid_thetas_[3], right_leg_orientation, period, right_spring_force);
-  setJointCommands(joint_handles_, left_cmd, right_cmd);
+  
+  output.leg_cmd[LEFT] = computePidLegCommand(length_des_l, theta_des_l, left_leg_state.vmc, *pid_left_leg_, *pid_left_theta_,
+                                            *pid_left_theta_vel_, left_leg_orientation, input.period, left_spring_force);
+  output.leg_cmd[RIGHT] = computePidLegCommand(length_des_r, theta_des_r, right_leg_state.vmc, *pid_right_leg_, *pid_right_theta_,
+                                             *pid_right_theta_vel_, right_leg_orientation, input.period, right_spring_force);
+  output.wheel_cmd[LEFT] = output.wheel_cmd[RIGHT] = 0.0;
 
   // Exit
   if (left_pos.theta > leg_state_threshold_->upstair_exit_theta_threshold &&
@@ -54,56 +58,45 @@ void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
       left_pos.L0 < leg_state_threshold_->upstair_exit_length_threshold &&
       right_pos.L0 < leg_state_threshold_->upstair_exit_length_threshold)
   {
-    controller->pubLegLenStatus(true);
-    controller->setMode(BalanceMode::STAND_UP);
-    controller->setStateChange(false);
-    ROS_INFO("[balance] Exit Upstairs");
+    // Need to handle pubLegLenStatus(true)
+    output.next_mode = BalanceMode::STAND_UP;
+    output.state_changed_requested = false;
   }
+  
+  return output;
 }
 
-inline void Upstairs::detectLegState(const Eigen::Matrix<double, STATE_DIM, 1>& x, LegOrientation& leg_state)
+void Upstairs::detectLegState(const Eigen::Matrix<double, STATE_DIM, 1>& x, LegOrientation& leg_state,
+                               const std::shared_ptr<LegStateThresholdParams>& threshold)
 {
-  if (!leg_state_threshold_)
+  if (!threshold)
   {
-    ROS_ERROR_THROTTLE(1.0, "LegUtils threshold params not initialized!");
     return;
   }
-  if (x[0] > leg_state_threshold_->under_lower && x[0] < leg_state_threshold_->under_upper)
+  if (x[0] > threshold->under_lower && x[0] < threshold->under_upper)
     leg_state = LegOrientation::UNDER;
-  else if ((x[0] < leg_state_threshold_->front_lower && x[0] > -M_PI) ||
-           (x[0] < M_PI && x[0] > leg_state_threshold_->front_upper))
+  else if ((x[0] < threshold->front_lower && x[0] > -M_PI) ||
+           (x[0] < M_PI && x[0] > threshold->front_upper))
     leg_state = LegOrientation::FRONT;
-  else if (x[0] > leg_state_threshold_->behind_lower && x[0] < leg_state_threshold_->behind_upper)
+  else if (x[0] > threshold->behind_lower && x[0] < threshold->behind_upper)
     leg_state = LegOrientation::BEHIND;
-  switch (leg_state)
-  {
-    case LegOrientation::UNDER:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: UNDER", x[0]);
-      break;
-    case LegOrientation::FRONT:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: FRONT", x[0]);
-      break;
-    case LegOrientation::BEHIND:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: BEHIND", x[0]);
-      break;
-  }
 }
 
-inline LegCommand Upstairs::computePidLegCommand(double desired_length, double desired_angle, const VMCPtr& vmc_,
-                                                 control_toolbox::Pid& length_pid, control_toolbox::Pid& angle_pid,
-                                                 control_toolbox::Pid& angle_vel_pid,
-                                                 const LegOrientation& leg_orientation, const ros::Duration& period,
-                                                 double& feedforward_force)
+LegCommand Upstairs::computePidLegCommand(double desired_length, double desired_angle, const VMCPtr& vmc_,
+                                           PidInterface& length_pid, PidInterface& angle_pid,
+                                           PidInterface& angle_vel_pid,
+                                           const LegOrientation& leg_orientation, double period,
+                                           double feedforward_force)
 {
   LegCommand cmd{ 0.0, 0.0, { 0.0, 0.0 } };
   const auto& leg_pos = vmc_->getPos();
   const auto& leg_spd = vmc_->getSpd();
 
   cmd.force = length_pid.computeCommand(desired_length - leg_pos.L0, period) + feedforward_force;
-  cmd.force = abs(cmd.force) > 250 ? std::copysign(1, cmd.force) * 250 : cmd.force;
+  cmd.force = std::abs(cmd.force) > 250 ? std::copysign(250.0, cmd.force) : cmd.force;
   if (leg_orientation == LegOrientation::BEHIND || leg_orientation == LegOrientation::UNDER)
   {
-    cmd.torque = angle_pid.computeCommand(-angles::shortest_angular_distance(desired_angle, leg_pos.theta), period);
+    cmd.torque = angle_pid.computeCommand(-shortest_angular_distance(desired_angle, leg_pos.theta), period);
   }
   else
   {

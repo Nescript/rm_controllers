@@ -4,28 +4,25 @@
 
 #pragma once
 
-#include <hardware_interface/joint_command_interface.h>
-#include <control_toolbox/pid.h>
+#include <memory>
+#include <vector>
 
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
-#include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/pid_interface.h"
 
 namespace rm_chassis_controllers
 {
 class SitDown : public ModeBase
 {
 public:
-  explicit SitDown(BipedalControllerInterface* controller_,
-                   const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                   const std::vector<control_toolbox::Pid*>& pid_wheels);
-  void execute(const ros::Time& time, const ros::Duration& period) override;
+  explicit SitDown(PidInterface* left_wheel, PidInterface* right_wheel);
+  LogicOutput execute(const LogicInput& input) override;
   const char* name() const override
   {
     return "SIT_DOWN";
   }
 
 private:
-  std::vector<hardware_interface::JointHandle*> joint_handles_;
-  std::vector<control_toolbox::Pid*> pid_wheels_;
+  PidInterface *pid_left_wheel_, *pid_right_wheel_;
 };
 }  // namespace rm_chassis_controllers

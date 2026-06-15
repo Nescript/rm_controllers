@@ -28,6 +28,7 @@
 
 #include "bipedal_wheel_controller/helper_functions.h"
 #include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/logic_types.h"
 #include "bipedal_wheel_controller/controller_mode/mode_manager.h"
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include "bipedal_wheel_controller/controller_interface.h"
@@ -35,6 +36,21 @@
 namespace rm_chassis_controllers
 {
 using Eigen::Matrix;
+
+class RosPidWrapper : public PidInterface
+{
+public:
+  RosPidWrapper(control_toolbox::Pid* pid) : pid_(pid)
+  {
+  }
+  double computeCommand(double error, double period) override
+  {
+    return pid_->computeCommand(error, ros::Duration(period));
+  }
+
+private:
+  control_toolbox::Pid* pid_;
+};
 
 struct LQRConfig
 {
@@ -119,6 +135,19 @@ private:
   int balance_mode_ = BalanceMode::SIT_DOWN;
   bool balance_state_changed_ = false;
   std::shared_ptr<ModeManager> mode_manager_;
+
+  // PIDs
+  control_toolbox::Pid pid_yaw_vel_, pid_left_leg_, pid_right_leg_, pid_theta_diff_, pid_roll_;
+  control_toolbox::Pid pid_left_leg_stand_up_, pid_right_leg_stand_up_;
+  control_toolbox::Pid pid_left_leg_theta_, pid_right_leg_theta_, pid_left_leg_theta_vel_, pid_right_leg_theta_vel_;
+  control_toolbox::Pid pid_left_wheel_vel_, pid_right_wheel_vel_, pid_wheel_vel_diff_;
+
+  std::unique_ptr<RosPidWrapper> wrapper_yaw_vel_, wrapper_left_leg_, wrapper_right_leg_, wrapper_theta_diff_,
+      wrapper_roll_;
+  std::unique_ptr<RosPidWrapper> wrapper_left_leg_stand_up_, wrapper_right_leg_stand_up_;
+  std::unique_ptr<RosPidWrapper> wrapper_left_leg_theta_, wrapper_right_leg_theta_, wrapper_left_leg_theta_vel_,
+      wrapper_right_leg_theta_vel_;
+  std::unique_ptr<RosPidWrapper> wrapper_left_wheel_vel_, wrapper_right_wheel_vel_, wrapper_wheel_vel_diff_;
 
   // Slippage_detection
   double leftWheelVel{}, rightWheelVel{}, leftWheelVelAbsolute{}, rightWheelVelAbsolute{}, slip_alpha_{ 2.0 },
