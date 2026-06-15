@@ -37,9 +37,12 @@ static inline double get_theta_leg_offset(const double& l)
 inline double f_spring_force(double L0, double l1, double l2, double Fs, double s2, double s3, double alpha_s)
 {
   double cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
+  clamp(cos_theta3, -1.0, 1.0);
   double theta3 = acos(cos_theta3);
   double ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
-  double Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
+  double sin_theta3 = sin(theta3);
+  if (ls == 0.0 || sin_theta3 == 0.0) return 0.0;
+  double Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin_theta3);
   return Fv;
 }
 

@@ -40,7 +40,6 @@ LogicOutput StandUp::execute(const LogicInput& input)
   const auto& left_pos = left_leg_state.vmc->getPos();
   const auto& right_pos = right_leg_state.vmc->getPos();
 
-  auto model_params_ = input.model_params;
   auto spring_params_ = input.spring_params;
   double left_spring_force = -f_spring_force(left_pos.L0, left_leg_state.vmc->getL1(), left_leg_state.vmc->getL2(),
                                             spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);

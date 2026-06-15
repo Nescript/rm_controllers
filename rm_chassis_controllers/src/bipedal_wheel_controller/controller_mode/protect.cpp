@@ -39,7 +39,6 @@ LogicOutput Protect::execute(const LogicInput& input)
   const auto& chassis_geometry_params = input.chassis_geometry_params;
   const auto& chassis_state = input.chassis_state;
   const auto& vel_cmd_ = input.instruction;
-  const auto& model_params_ = input.model_params;
   const auto& spring_params_ = input.spring_params;
 
   double left_wheel_desired_vel{}, right_wheel_desired_vel{};

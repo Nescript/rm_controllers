@@ -36,7 +36,6 @@ LogicOutput Upstairs::execute(const LogicInput& input)
   const auto& leg_state_threshold_ = input.leg_threshold_params;
 
   double theta_des_l{ 1.57 }, theta_des_r{ 1.57 }, length_des_l{ 0.18 }, length_des_r{ 0.18 };
-  auto model_params_ = input.model_params;
   auto spring_params_ = input.spring_params;
   double left_spring_force = -f_spring_force(left_pos.L0, left_leg_state.vmc->getL1(), left_leg_state.vmc->getL2(),
                                             spring_params_->f_spring, spring_params_->s2, spring_params_->s3, spring_params_->alpha_s);

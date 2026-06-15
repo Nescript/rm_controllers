@@ -352,7 +352,9 @@ double Normal::calculateSupportForce(double F, double Tp, double leg_length, con
                                      const std::shared_ptr<ModelParams>& model_params, double period)
 {
   static double last_ddot_zM = acc_z - model_params->g, last_dot_theta = x(1),
-                last_ddot_theta = (x(1) - last_dot_theta) / period, last_ddot_leg_len, d_leg_len[3]{};
+                last_ddot_theta = 0.0, last_ddot_leg_len = 0.0, d_leg_len[3]{};
+  if (period <= 0.0) period = 0.001;
+
   d_leg_len[0] = d_leg_len[1];
   d_leg_len[1] = d_leg_len[2];
   d_leg_len[2] = leg_len_spd;
@@ -361,7 +363,7 @@ double Normal::calculateSupportForce(double F, double Tp, double leg_length, con
   // lp filter
   double ddot_zM = 0.3 * (acc_z - model_params->g) + 0.7 * last_ddot_zM;
   double ddot_theta = 0.3 * ((x(1) - last_dot_theta) / period) + 0.7 * last_ddot_theta;
-  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / 2 * period + 0.7 * last_ddot_leg_len;
+  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / (2 * period) + 0.7 * last_ddot_leg_len;
   last_dot_theta = x(1);
   last_ddot_theta = ddot_theta;
   last_ddot_leg_len = ddot_leg_len;
