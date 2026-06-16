@@ -25,6 +25,12 @@ ModeManager::ModeManager(BipedalControllerInterface* controller, ros::NodeHandle
     { "pid_right_leg_stand_up", &pid_right_leg_stand_up_ },
     { "pid_wheel_vel_diff", &pid_wheel_vel_diff_ },
   };
+  /*****************************************************************************************************/
+  /* 这里涉及的所有 PID 控制器会被封装进一个wrapper
+  /* 考虑到 PID 在逻辑上是共通的，我们这里的设计思路是在各个与 ROS 无关的模式（Mode）内部，将涉及到 PID 的部分全部解构
+  /* 为调用了一个 PID 封装类的 computeCommand 方法，输入是 error 和 period、
+  /* 这样类似的 wrapper 我们可以统一写成 ROSwrapper.h
+  /*****************************************************************************************************/
   for (const auto& e : pids)
     if (controller_nh.hasParam(e.first) && !e.second->init(ros::NodeHandle(controller_nh, e.first)))
       ROS_ERROR("Failed to load pid %s", e.first);
