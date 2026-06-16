@@ -30,6 +30,8 @@ ModeManager::ModeManager(BipedalControllerInterface* controller, ros::NodeHandle
   /* 考虑到 PID 在逻辑上是共通的，我们这里的设计思路是在各个与 ROS 无关的模式（Mode）内部，将涉及到 PID 的部分全部解构
   /* 为调用了一个 PID 封装类的 computeCommand 方法，输入是 error 和 period、
   /* 这样类似的 wrapper 我们可以统一写成 ROSwrapper.h
+  /* 报错信息也是同理，依赖注入会是我们解耦的一个重要技术
+  /* 为此我们需要一个虚拟基类，包含
   /*****************************************************************************************************/
   for (const auto& e : pids)
     if (controller_nh.hasParam(e.first) && !e.second->init(ros::NodeHandle(controller_nh, e.first)))
