@@ -2,7 +2,7 @@
 // Created by Nesc on 26-6-16
 //
 
-#include "bipedal_wheel_controller/controller.h"
+#include "rm_chassis_controllers/bipedal_wheel/controllers.h"
 
 namespace rm_chassis_controllers
 {
@@ -11,13 +11,14 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
 {
   ChassisBase::init(robot_hw, root_nh, controller_nh);
 
-  if (!setupParams(controller_nh)) return false;
-    
-  setupRosCommunications(root_nh, controller_nh);
+  if (!initParams(controller_nh))
+    return false;
 
-  if (!extractHardwareHandles(robot_hw))
+  initRosInterface(root_nh, controller_nh);
+
+  if (!initHardwareHandles(robot_hw))
   {
-    ROS_ERROR("[BIPED_WHEEL_CHASSIS] Failed to extract hardware handles")
+    ROS_ERROR("[BIPED_WHEEL_CHASSIS] Failed to extract hardware handles");
     // 考虑进一步的错误处理，在职责函数内部进行
     return false;
   }
@@ -25,15 +26,60 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   {
     return false;
   }
-
+  return true;
 }
 
-bool BipedalController::extractHardwareHandles(hardware_interface::RobotHW* robot_hw) 
+bool BipedalController::initHardwareHandles(hardware_interface::RobotHW* robot_hw)
 {
+  auto* imu_interface = robot_hw->get<hardware_interface::ImuSensorInterface>();
+  if (imu_interface == nullptr)
+  {
+    ROS_ERROR("[BipedalController] Failed to get ImuSensorInterface.");
+    return false;
+  }
+  try
+  {
+    imu_handle_ = imu_interface->getHandle("base_imu");
+  }
+  catch (const hardware_interface::HardwareInterfaceException& ex)
+  {
+    ROS_ERROR_STREAM("[BipedalController] Failed to get imu handle: " << ex.what());
+    return false;
+  }
 
+  //  gimbal_imu_handle_ = robot_hw->get<hardware_interface::ImuSensorInterface>()->getHandle("gimbal_imu");
+
+  auto* joint_interface = robot_hw->get<hardware_interface::EffortJointInterface>();
+  if (joint_interface == nullptr)
+  {
+    ROS_ERROR("[BipedalController] Failed to get EffortJointInterface.");
+    return false;
+  }
+
+  const std::pair<const char*, hardware_interface::JointHandle*> table[] = {
+    { "left_hip_joint", &left_hip_joint_handle_ },     { "left_knee_joint", &left_knee_joint_handle_ },
+    { "right_hip_joint", &right_hip_joint_handle_ },   { "right_knee_joint", &right_knee_joint_handle_ },
+    { "left_wheel_joint", &left_wheel_joint_handle_ }, { "right_wheel_joint", &right_wheel_joint_handle_ }
+  };
+  for (const auto& t : table)
+  {
+    try
+    {
+      *t.second = joint_interface->getHandle(t.first);
+      joint_handles_.push_back(t.second);
+    }
+    catch (const hardware_interface::HardwareInterfaceException& ex)
+    {
+      ROS_ERROR_STREAM("[BipedalController] Failed to get joint handle for " << t.first << ": " << ex.what());
+      return false;
+    }
+  }
+
+  return true;
 }
 
-bool BipedalController::setupParams(ros::NodeHandle& controller_nh)
+/*
+bool BipedalController::initParams(ros::NodeHandle& controller_nh)
 {
   model_params_ = std::make_shared<ModelParams>();
   control_params_ = std::make_shared<ControlParams>();
@@ -233,5 +279,6 @@ bool BipedalController::setupSpringParams(ros::NodeHandle& controller_nh)
     }
   return true;
 }
-
-}
+*/
+};
+}  // namespace rm_chassis_controllers
