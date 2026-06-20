@@ -12,12 +12,14 @@ public:
   BipedalWheelCore() = default;
 
   // 这一步应该引入所有的参数，包括状态机的参数，还需要初始化一些依赖注入
-  bool init(const bipedal_wheel_core::ControllerConfig& config);
+  bool init(const bipedal_wheel_core::ControllerParams& config);
 
   // 这一步应该引入硬件的状态
   void update(bipedal_wheel_core::HardwareState& state);
 
 private:
-  bipedal_wheel_core::ControllerConfig config_;
+  bipedal_wheel_core::ControllerParams config_;
+
+  void updateEstimation(bipedal_wheel_core::HardwareState& state);
 };
 }  // namespace bipedal_wheel_core

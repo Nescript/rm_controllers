@@ -5,8 +5,9 @@
 
 namespace bipedal_wheel_core
 {
+
 // 下面的函数可以考虑转为存储config对象的指针，但是要考虑其生命周期
-bool BipedalWheelCore::init(const bipedal_wheel_core::ControllerConfig& config)
+bool BipedalWheelCore::init(const bipedal_wheel_core::ControllerParams& config)
 {
   const auto& params = config.model_params;
 
@@ -31,5 +32,9 @@ bool BipedalWheelCore::init(const bipedal_wheel_core::ControllerConfig& config)
 
   config_ = config;
   return true;
+}
+
+void BipedalWheelCore::update(bipedal_wheel_core::HardwareState& state)
+{
 }
 }  // namespace bipedal_wheel_core

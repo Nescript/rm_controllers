@@ -32,7 +32,7 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     joint_handles_.push_back(t.second);
   }
 
-  if (!setupParams(controller_nh))
+  if (!initParams(controller_nh))
   {
     ROS_ERROR("[balance] Failed to setup parameters");
     return false;
@@ -112,7 +112,9 @@ void BipedalController::clearStatus()
 
 void BipedalController::updateEstimation(const ros::Time& time, const ros::Duration& period)
 {
+  // get info from imu
   geometry_msgs::Vector3 gyro, acc;
+  /************************************************************** */
   gyro.x = imu_handle_.getAngularVelocity()[0];
   gyro.y = imu_handle_.getAngularVelocity()[1];
   gyro.z = imu_handle_.getAngularVelocity()[2];
@@ -124,11 +126,14 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   double roll{}, pitch{}, yaw{};
   try
   {
+    // 将 imu 数据变换到 base link 坐标系
     tf2::doTransform(gyro, angular_vel_base,
                      robot_state_handle_.lookupTransform("base_link", imu_handle_.getFrameId(), time));
+    // get imu to base transform
     geometry_msgs::TransformStamped tf_msg;
     tf_msg = robot_state_handle_.lookupTransform(imu_handle_.getFrameId(), "base_link", time);
     tf2::fromMsg(tf_msg.transform, imu2base);
+    // get odom to imu transform
     tf2::Quaternion odom2imu_quaternion;
     tf2::Vector3 odom2imu_origin;
     odom2imu_quaternion.setValue(imu_handle_.getOrientation()[0], imu_handle_.getOrientation()[1],
@@ -146,12 +151,15 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     tf2::Vector3 z_body(0, 0, 1);
     tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
     overturn_ = (abs(pitch) > 0.65 || abs(roll) > 0.8) && z_world.z() < 0.0;
+    // 这里是机体翻倒的判断，具体是建立指向 z 轴的单位向量
 
     chassis_state_.angular_vel = angular_vel_base;
     chassis_state_.linear_acc = linear_acc_base;
     chassis_state_.roll = roll;
     chassis_state_.pitch = pitch;
     chassis_state_.yaw = yaw;
+    // 以上变换最终目的是得到以上的机体（底盘）状态量
+    // 变换 imu 数据得到
   }
   catch (tf2::TransformException& ex)
   {
@@ -159,9 +167,11 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     setJointCommands(joint_handles_, { 0, 0, { 0., 0. } }, { 0, 0, { 0., 0. } });
     return;
   }
+  // 变换失败进保护
+  /************************************************************** */
 
   // vmc
-  double left_angle[2]{}, right_angle[2]{};
+  double left_angle[2]{}, right_angle[2]{};  // 存储腿部两个电机的角度
 
   //  double left_pos[2]{}, left_spd[2]{}, right_pos[2]{}, right_spd[2]{};
   // [0]:hip_vmc_joint [1]:knee_vmc_joint
@@ -175,6 +185,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   left_angle[1] = left_knee_joint_handle_.getPosition() - M_PI_2;
   right_angle[0] = right_hip_joint_handle_.getPosition() + M_PI_2;
   right_angle[1] = right_knee_joint_handle_.getPosition() - M_PI_2;
+  // 转换为 VMC 模型的角度
 
   // left vmc calc
   leg_state_[LEFT].vmc->calc_jacobian(left_angle[0], left_angle[1]);
@@ -187,6 +198,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   leg_state_[RIGHT].vmc->leg_pos(right_angle[0], right_angle[1]);
   leg_state_[RIGHT].vmc->leg_spd(right_hip_joint_handle_.getVelocity(), right_knee_joint_handle_.getVelocity());
   leg_state_[RIGHT].vmc->leg_conv_t(right_hip_joint_handle_.getEffort(), right_knee_joint_handle_.getEffort());
+  // 分别用 vmc 的各种方法计算腿部虚拟杆的状态
 
   const LegPos& left_pos = leg_state_[LEFT].vmc->getPos();
   const LegSpd& left_spd = leg_state_[LEFT].vmc->getSpd();
@@ -200,6 +212,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   rightWheelVel = (right_wheel_joint_handle_.getVelocity() + angular_vel_base.y + right_spd.dTheta) * wheel_radius_;
   leftWheelVelAbsolute = leftWheelVel + left_pos.L0 * left_spd.dTheta * cos(left_pos.theta + pitch) +
                          left_spd.dL0 * sin(left_pos.theta + pitch);
+  // 此处将轮子相对于对面的速度加上了虚拟腿的速度在水平上的分量 还有 虚拟腿伸长的速度在水平上的分量。由此最后得到车子本身的绝对速度
   rightWheelVelAbsolute = rightWheelVel + right_pos.L0 * right_spd.dTheta * cos(right_pos.theta + pitch) +
                           right_spd.dL0 * sin(right_pos.theta + pitch);
 
@@ -298,7 +311,7 @@ void BipedalController::stopping(const ros::Time& time)
   ROS_INFO("[balance] Controller Stop");
 }
 
-bool BipedalController::setupParams(ros::NodeHandle& controller_nh)
+bool BipedalController::initParams(ros::NodeHandle& controller_nh)
 {
   model_params_ = std::make_shared<ModelParams>();
   control_params_ = std::make_shared<ControlParams>();

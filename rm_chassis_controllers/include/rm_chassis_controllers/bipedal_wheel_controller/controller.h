@@ -92,7 +92,7 @@ private:
   void updateEstimation(const ros::Time& time, const ros::Duration& period);
 
   bool setupLQR(ros::NodeHandle& controller_nh);
-  bool setupParams(ros::NodeHandle& controller_nh);
+  bool initParams(ros::NodeHandle& controller_nh);
   bool setupModelParams(ros::NodeHandle& controller_nh);
   bool setupControlParams(ros::NodeHandle& controller_nh);
   bool setupBiasParams(ros::NodeHandle& controller_nh);
