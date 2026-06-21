@@ -15,7 +15,7 @@ namespace rm_chassis_controllers
 constexpr static const int STATE_DIM = 6;
 constexpr static const int CONTROL_DIM = 2;
 
-struct ModelParams
+struct LqrModelParams
 {
   double L_weight;   // Length weight to wheel axis
   double Lm_weight;  // Length weight to mass center
@@ -82,6 +82,7 @@ struct LegCommand
   double torque;    // Torque
   double input[2];  // input
 };
+// 这个是控制量的结构，可以保留在这里
 
 enum LegOrientation
 {

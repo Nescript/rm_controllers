@@ -8,7 +8,7 @@
 #include <hardware_interface/imu_sensor_interface.h>
 #include <hardware_interface/joint_command_interface.h>
 #include "rm_chassis_controllers/chassis_base.h"
-#include "bipedal_wheel/definitions.h"
+#include "bipedal_wheel/core/definitions.h"
 #include "ros/node_handle.h"
 
 namespace rm_chassis_controllers
@@ -50,12 +50,15 @@ private:
   std::vector<hardware_interface::JointHandle*> joint_handles_;
 
   // Params
-  std::shared_ptr<ModelParams> model_params_;
-  std::shared_ptr<ControlParams> control_params_;
+  std::shared_ptr<bipedal_wheel_core::LqrModelParams> model_params_;
+  /*
+  std::shared_ptr<bipedal_wheel_core::ControlParams> control_params_;
   std::shared_ptr<BiasParams> bias_params_;
   std::shared_ptr<SpringParams> spring_params_;
   std::shared_ptr<ChassisGeometryParams> chassis_geometry_params_;
   std::shared_ptr<LegStateThresholdParams> leg_threshold_params_;
+  */
+  bipedal_wheel_core::ChassisStatus chassis_status_;
 };
 
 }  // namespace rm_chassis_controllers
