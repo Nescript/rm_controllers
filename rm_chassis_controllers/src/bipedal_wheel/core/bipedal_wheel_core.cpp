@@ -1,5 +1,4 @@
 #include "bipedal_wheel/core/bipedal_wheel_core.h"
-#include "bipedal_wheel/core/definitions.h"
 #include <cmath>
 #include <iostream>
 
@@ -34,7 +33,28 @@ bool BipedalWheelCore::init(const bipedal_wheel_core::ControllerParams& config)
   return true;
 }
 
-void BipedalWheelCore::update(bipedal_wheel_core::HardwareState& state)
+bipedal_wheel_core::ControlOutput BipedalWheelCore::update(double dt, const bipedal_wheel_core::SensorMeasurements& sens_in)
 {
+  // 1. 更新卡尔曼滤波等状态估计
+  updateEstimation(dt, sens_in);
+
+  // 2. 状态机和控制安全计算
+
+  // 3. 计算输出关节力矩/PD控制目标
+  bipedal_wheel_core::ControlOutput output{};
+  return output;
 }
+
+void BipedalWheelCore::reset()
+{
+  // 重置内部状态估计
+  lqr_status_ = bipedal_wheel_core::LQRStatus{};
+  robot_mode_ = bipedal_wheel_core::RobotMode::HANGING;
+}
+
+void BipedalWheelCore::updateEstimation(double dt, const bipedal_wheel_core::SensorMeasurements& sens_in)
+{
+  // 状态估计器占位符，由您之后勤学精进完成具体融合与滤波算法
+}
+
 }  // namespace bipedal_wheel_core

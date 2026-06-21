@@ -8,7 +8,8 @@
 #include <hardware_interface/imu_sensor_interface.h>
 #include <hardware_interface/joint_command_interface.h>
 #include "rm_chassis_controllers/chassis_base.h"
-#include "bipedal_wheel/core/definitions.h"
+#include "bipedal_wheel/core/core_types.h"
+#include "bipedal_wheel/core/bipedal_wheel_core.h"
 #include "ros/node_handle.h"
 
 namespace rm_chassis_controllers
@@ -58,7 +59,9 @@ private:
   std::shared_ptr<ChassisGeometryParams> chassis_geometry_params_;
   std::shared_ptr<LegStateThresholdParams> leg_threshold_params_;
   */
-  bipedal_wheel_core::ChassisStatus chassis_status_;
+  
+  // 核心算法实例
+  bipedal_wheel_core::BipedalWheelCore core_;
 };
 
 }  // namespace rm_chassis_controllers
