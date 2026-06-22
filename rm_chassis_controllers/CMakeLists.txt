@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(rm_chassis_controllers)
 
-## Use C++14
-set(CMAKE_CXX_STANDARD 14)
+## Use C++17
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,
@@ -70,9 +70,13 @@ include_directories(
         ${EIGEN3_INCLUDE_DIR}
 )
 
-file(GLOB_RECURSE BIPEDAL_SOURCES
-        "src/bipedal_wheel_controller/*.cpp"
-        "src/bipedal_wheel_controller/*.c"
+set(BIPEDAL_SOURCES
+        src/bipedal_wheel/ros/controller.cpp
+        src/bipedal_wheel/core/dynamics/gen_A.c
+        src/bipedal_wheel/core/dynamics/gen_B.c
+        src/bipedal_wheel/core/vmc/VMC.cpp
+        src/bipedal_wheel_controller/series_legged_vmc_controller.cpp
+        src/bipedal_wheel_controller/vmc/VMC.cpp
 )
 
 ## Declare cpp executables

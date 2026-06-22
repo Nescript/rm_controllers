@@ -5,7 +5,7 @@
 
 #include <memory>
 
-namespace rm_chassis_controllers
+namespace bipedal_wheel_core
 {
 struct LegPos
 {
@@ -28,7 +28,7 @@ struct LegForce
 class VMC
 {
 public:
-  explicit VMC(double l1, double l2, double l5 = 0) : l1_(l1), l2_(l2), l3_(l2), l4_(l1), l5_(l5){};
+  explicit VMC(double l1, double l2, double l5 = 0) : l1_(l1), l2_(l2), l3_(l2), l4_(l1), l5_(l5) {};
   ~VMC() = default;
 
   /**
@@ -90,37 +90,21 @@ public:
   void calc_jacobian(double phi1, double phi4);
 
   inline double getL1() const
-  {
-    return l1_;
-  }
+  { return l1_; }
   inline double getL2() const
-  {
-    return l2_;
-  }
+  { return l2_; }
   inline double getL3() const
-  {
-    return l3_;
-  }
+  { return l3_; }
   inline double getL4() const
-  {
-    return l4_;
-  }
+  { return l4_; }
   inline double getL5() const
-  {
-    return l5_;
-  }
+  { return l5_; }
   inline const LegPos& getPos() const
-  {
-    return pos_;
-  }
+  { return pos_; }
   inline const LegSpd& getSpd() const
-  {
-    return spd_;
-  }
+  { return spd_; }
   inline const LegForce getForceReal() const
-  {
-    return force_real_;
-  }
+  { return force_real_; }
 
 private:
   /**
@@ -145,4 +129,4 @@ private:
   double l1_, l2_, l3_, l4_, l5_;
 };
 using VMCPtr = std::shared_ptr<VMC>;
-}  // namespace rm_chassis_controllers
+}  // namespace bipedal_wheel_core

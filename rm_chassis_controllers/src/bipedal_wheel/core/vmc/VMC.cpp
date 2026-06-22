@@ -2,10 +2,10 @@
 // Created by wk on 2026/2/25.
 //
 
-#include "bipedal_wheel/vmc/VMC.h"
+#include "bipedal_wheel/core/vmc/VMC.h"
 #include <math.h>
 
-namespace rm_chassis_controllers
+namespace bipedal_wheel_core
 {
 void VMC::leg_pos(double phi1, double phi4)
 {
@@ -272,4 +272,4 @@ void VMC::leg_conv_t(double T1, double T2)
   //  force_real_.F = inv_Jt[0][0] * T1 + inv_Jt[0][1] * T2;   // F
   //  force_real_.Tp = inv_Jt[1][0] * T1 + inv_Jt[1][1] * T2;  // Tp
 }
-}  // namespace rm_chassis_controllers
+}  // namespace bipedal_wheel_core

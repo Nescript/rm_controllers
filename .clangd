@@ -1,0 +1,4 @@
+If:
+  PathExclude: ['.*\.c', '.*/dynamics/.*']
+CompileFlags:
+  Add: [-std=c++17]
