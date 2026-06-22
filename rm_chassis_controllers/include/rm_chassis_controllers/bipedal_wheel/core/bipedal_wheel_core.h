@@ -80,6 +80,7 @@ private:
   // Shared internal flags
   bool complete_stand_ = false;
   bool overturn_ = false;
+  bool move_flag_ = false;
   bool balance_state_changed_ = false;
   bool recovery_leg_spd_turnback_ = false;
 

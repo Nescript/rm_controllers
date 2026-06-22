@@ -2,25 +2,18 @@
 
 #include "bipedal_wheel/core/bipedal_wheel_core.h"
 #include <cmath>
-#include <iostream>
-#include <algorithm>
 #include <vector>
 #include <variant>
 
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::init(
-    const bipedal_wheel_core::ControllerParams& config, LoggerType& logger,
-    const std::vector<PidType*>& pid_legs, const std::vector<PidType*>& pid_legs_stand_up,
-    const std::vector<PidType*>& pid_thetas, const std::vector<PidType*>& pid_wheels,
-    PidType* pid_yaw_vel, PidType* pid_theta_diff, PidType* pid_roll, PidType* pid_wheel_vel_diff)
+    const bipedal_wheel_core::ControllerParams& config, LoggerType& logger, const std::vector<PidType*>& pid_legs,
+    const std::vector<PidType*>& pid_legs_stand_up, const std::vector<PidType*>& pid_thetas,
+    const std::vector<PidType*>& pid_wheels, PidType* pid_yaw_vel, PidType* pid_theta_diff, PidType* pid_roll,
+    PidType* pid_wheel_vel_diff)
 {
   const auto& params = config.model_params;
 
@@ -57,15 +50,9 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   return true;
 }
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::update(
-    double dt,
-    const bipedal_wheel_core::SensorMeasurements& sens_in,
+    double dt, const bipedal_wheel_core::SensorMeasurements& sens_in,
     const bipedal_wheel_core::ControllerCommands& cmd_in)
 {
   // 1. Update estimation
@@ -128,6 +115,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
     robot_mode_,
     complete_stand_,
     overturn_,
+    move_flag_,
     balance_state_changed_,
     recovery_leg_spd_turnback_,
     left_vmc_.get(),
@@ -152,6 +140,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
   robot_mode_ = ctx.current_mode;
   complete_stand_ = ctx.complete_stand;
   overturn_ = ctx.overturn;
+  move_flag_ = ctx.move_flag;
   balance_state_changed_ = ctx.balance_state_changed;
   recovery_leg_spd_turnback_ = ctx.recovery_leg_spd_turnback;
 
@@ -170,6 +159,7 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   robot_mode_ = bipedal_wheel_core::RobotMode::HANGING;
   complete_stand_ = false;
   overturn_ = false;
+  move_flag_ = false;
   balance_state_changed_ = false;
   recovery_leg_spd_turnback_ = false;
   last_linear_acc_base_x_ = 0.0;
@@ -186,12 +176,7 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   }
 }
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::updateEstimation(
     double dt, const bipedal_wheel_core::SensorMeasurements& sens_in,
     const bipedal_wheel_core::ControllerCommands& cmd_in)
@@ -231,13 +216,17 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   const auto& right_pos = right_vmc_->getPos();
   const auto& right_spd = right_vmc_->getSpd();
 
-  double leftWheelVel = (sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel + sens_in.chassis_state.angular_vel.y() + left_spd.dTheta) * wheel_radius;
-  double rightWheelVel = (sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel + sens_in.chassis_state.angular_vel.y() + right_spd.dTheta) * wheel_radius;
+  double leftWheelVel = (sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel + sens_in.chassis_state.angular_vel.y() +
+                         left_spd.dTheta) *
+                        wheel_radius;
+  double rightWheelVel = (sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel +
+                          sens_in.chassis_state.angular_vel.y() + right_spd.dTheta) *
+                         wheel_radius;
 
   double leftWheelVelAbsolute = leftWheelVel + left_pos.L0 * left_spd.dTheta * std::cos(left_pos.theta + pitch) +
-                                 left_spd.dL0 * std::sin(left_pos.theta + pitch);
+                                left_spd.dL0 * std::sin(left_pos.theta + pitch);
   double rightWheelVelAbsolute = rightWheelVel + right_pos.L0 * right_spd.dTheta * std::cos(right_pos.theta + pitch) +
-                                  right_spd.dL0 * std::sin(right_pos.theta + pitch);
+                                 right_spd.dL0 * std::sin(right_pos.theta + pitch);
 
   double wheel_vel_aver = (leftWheelVelAbsolute + rightWheelVelAbsolute) / 2.0;
 
@@ -246,8 +235,7 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   double slip_R_wheel = 2.0 * R_wheel;
 
   Eigen::Matrix2d R;
-  R << (slip_flag_ ? slip_R_wheel : R_wheel), 0.0,
-       0.0, 200.0;
+  R << (slip_flag_ ? slip_R_wheel : R_wheel), 0.0, 0.0, 200.0;
 
   Eigen::Vector2d z;
   z << wheel_vel_aver, 0.2 * last_linear_acc_base_x_ + 0.8 * sens_in.chassis_state.linear_acc.x();
@@ -260,6 +248,15 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   slip_flag_ = std::abs(x_hat(0) - wheel_vel_aver) > 3.0;
 
   // 5. Update estimated state
+  if (std::abs(sens_in.chassis_state.pitch) > 0.6 || std::abs(sens_in.chassis_state.roll) > 0.8)
+  {
+    overturn_ = true;
+  }
+  else if (std::abs(sens_in.chassis_state.pitch) < 0.2 && std::abs(sens_in.chassis_state.roll) < 0.2)
+  {
+    overturn_ = false;
+  }
+
   lqr_status_.dx = (cmd_in.base_state != 1) ? x_hat(0) : 0.0; // base_state 1 is RAW
   
   if (cmd_in.base_state != 1 && std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01)
@@ -268,7 +265,7 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   }
   else
   {
-    recovery_leg_spd_turnback_ = true; // resets position and indicates moving state
+    move_flag_ = true; // resets position and indicates moving state
     lqr_status_.x = 0.0;
   }
 }

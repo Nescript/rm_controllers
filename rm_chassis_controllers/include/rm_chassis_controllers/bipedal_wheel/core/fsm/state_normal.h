@@ -105,7 +105,12 @@ public:
     double F_roll = ctx.pid_roll->computeCommand(0.0 - chassis_state.roll, ctx.dt);
 
     // LQR Feedback Gain Interpolation using leg length
-    Eigen::Matrix<double, 4, 12> coeffs_ = ctx.cmd_in.coeffs;
+    if (ctx.cmd_in.coeffs == nullptr)
+    {
+      ctx.logger.error("coeffs is nullptr in state_normal!");
+      return;
+    }
+    const Eigen::Matrix<double, 4, 12>& coeffs_ = *ctx.cmd_in.coeffs;
     Eigen::Matrix<double, 2, 6> k_left, k_right;
     k_left.setZero();
     k_right.setZero();
@@ -158,7 +163,7 @@ public:
 
     if (ctx.cmd_in.base_state != 1)
     {
-      if (ctx.recovery_leg_spd_turnback) // maps to getMoveFlag()
+      if (!ctx.move_flag)
       {
         x_offset_flag_ = true;
         x_left(THETA) -= bias_params_.theta;
@@ -396,6 +401,8 @@ public:
       ctx.complete_stand = false;
       ctx.logger.info("[balance] Exit NORMAL");
     }
+
+    ctx.move_flag = false;
   }
 
 private:

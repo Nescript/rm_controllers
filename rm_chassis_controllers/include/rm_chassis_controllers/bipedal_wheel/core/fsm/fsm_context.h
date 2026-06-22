@@ -26,6 +26,7 @@ struct FsmContext
   // Shared state indicators
   bool& complete_stand;
   bool& overturn;
+  bool& move_flag;
   bool& balance_state_changed;
   bool& recovery_leg_spd_turnback;
 

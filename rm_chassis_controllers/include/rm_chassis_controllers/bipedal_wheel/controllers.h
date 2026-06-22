@@ -23,8 +23,10 @@ class RosPidWrapper
 {
 public:
   RosPidWrapper() = default;
-  explicit RosPidWrapper(control_toolbox::Pid* pid) : pid_(pid) {}
-  
+  explicit RosPidWrapper(control_toolbox::Pid* pid) : pid_(pid)
+  {
+  }
+
   double computeCommand(double error, double dt)
   {
     if (pid_)
@@ -32,7 +34,8 @@ public:
     return 0.0;
   }
 
-  void setPid(control_toolbox::Pid* pid) { pid_ = pid; }
+  void setPid(control_toolbox::Pid* pid)
+  { pid_ = pid; }
 
 private:
   control_toolbox::Pid* pid_ = nullptr;
@@ -41,9 +44,12 @@ private:
 class RosLoggerWrapper
 {
 public:
-  void info(const std::string& msg) { ROS_INFO_STREAM(msg); }
-  void warn(const std::string& msg) { ROS_WARN_STREAM(msg); }
-  void error(const std::string& msg) { ROS_ERROR_STREAM(msg); }
+  void info(const std::string& msg)
+  { ROS_INFO_STREAM(msg); }
+  void warn(const std::string& msg)
+  { ROS_WARN_STREAM(msg); }
+  void error(const std::string& msg)
+  { ROS_ERROR_STREAM(msg); }
 };
 
 class BipedalController : public ChassisBase<rm_control::RobotStateInterface, hardware_interface::ImuSensorInterface,
@@ -74,8 +80,9 @@ public:
   bool setupSpringParams(ros::NodeHandle& controller_nh);
   bool setupChassisGeometryParams(ros::NodeHandle& controller_nh);
 
-  void polyfit(const std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>>& Ks, const std::vector<double>& L0s,
-               Eigen::Matrix<double, 4, 12>& coeffs);
+  void
+  polyfit(const std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>>& Ks,
+          const std::vector<double>& L0s, Eigen::Matrix<double, 4, 12>& coeffs);
 
   // handles
   hardware_interface::ImuSensorHandle imu_handle_, gimbal_imu_handle_;
@@ -93,6 +100,11 @@ public:
   std::shared_ptr<bipedal_wheel_core::LegStateThresholdParams> leg_threshold_params_;
   double default_leg_length_ = 0.12;
 
+  // TF cache for IMU <-> base_link static transform
+  bool is_tf_cached_ = false;
+  tf2::Transform imu2base_tf_; // IMU -> base_link
+  tf2::Transform base2imu_tf_; // base_link -> IMU
+
   // LQR weights & coefficients
   Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> q_;
   Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::CONTROL_DIM> r_;
@@ -107,41 +119,40 @@ public:
   double last_yaw_vel_ = 0.0;
 
   // Subscriber commands
-  double legCmd_ = 0.12;
-  bool jumpCmd_ = false;
+  double leg_length_cmd_ = 0.12;
+  bool jump_cmd_ = false;
   ros::Subscriber leg_cmd_sub_;
   ros::Subscriber recovery_leg_spd_turnback_sub_;
 
-  // PID controllers
-  control_toolbox::Pid pid_yaw_vel_, pid_left_leg_, pid_right_leg_, pid_theta_diff_, pid_roll_;
+  // PID controllers (raw control_toolbox::Pid objects)
+  control_toolbox::Pid pid_yaw_vel_, pid_theta_diff_, pid_roll_, pid_wheel_vel_diff_;
+  control_toolbox::Pid pid_left_leg_, pid_right_leg_;
   control_toolbox::Pid pid_left_leg_stand_up_, pid_right_leg_stand_up_;
-  control_toolbox::Pid pid_left_leg_theta_, pid_right_leg_theta_, pid_left_leg_theta_vel_, pid_right_leg_theta_vel_;
-  control_toolbox::Pid pid_left_wheel_vel_, pid_right_wheel_vel_, pid_wheel_vel_diff_;
+  control_toolbox::Pid pid_left_leg_theta_, pid_right_leg_theta_;
+  control_toolbox::Pid pid_left_leg_theta_vel_, pid_right_leg_theta_vel_;
+  control_toolbox::Pid pid_left_wheel_vel_, pid_right_wheel_vel_;
 
   // PID wrappers
-  RosPidWrapper wrapper_yaw_vel_;
-  RosPidWrapper wrapper_theta_diff_;
-  RosPidWrapper wrapper_roll_;
-  RosPidWrapper wrapper_wheel_vel_diff_;
-  std::vector<RosPidWrapper*> wrapper_legs_;
-  std::vector<RosPidWrapper*> wrapper_legs_stand_up_;
-  std::vector<RosPidWrapper*> wrapper_thetas_;
-  std::vector<RosPidWrapper*> wrapper_wheels_;
+  RosPidWrapper pid_wrapper_yaw_vel_, pid_wrapper_theta_diff_;
+  RosPidWrapper pid_wrapper_roll_, pid_wrapper_wheel_vel_diff_;
+  RosPidWrapper pid_wrapper_left_leg_, pid_wrapper_right_leg_;
+  RosPidWrapper pid_wrapper_left_leg_stand_up_, pid_wrapper_right_leg_stand_up_;
+  RosPidWrapper pid_wrapper_left_leg_theta_, pid_wrapper_right_leg_theta_;
+  RosPidWrapper pid_wrapper_left_leg_theta_vel_, pid_wrapper_right_leg_theta_vel_;
+  RosPidWrapper pid_wrapper_left_wheel_vel_, pid_wrapper_right_wheel_vel_;
+
+  // Wrapper pointer vectors passed into core_.init()
+  std::vector<RosPidWrapper*> pid_wrappers_legs_;
+  std::vector<RosPidWrapper*> pid_wrappers_legs_stand_up_;
+  std::vector<RosPidWrapper*> pid_wrappers_thetas_;
+  std::vector<RosPidWrapper*> pid_wrappers_wheels_;
 
   // Logger wrapper
-  RosLoggerWrapper logger_wrapper_;
+  RosLoggerWrapper logger_;
 
-  // Instances of wrapper objects to wrap the actual control_toolbox::Pids
-  RosPidWrapper wrapper_left_leg_, wrapper_right_leg_;
-  RosPidWrapper wrapper_left_leg_stand_up_, wrapper_right_leg_stand_up_;
-  RosPidWrapper wrapper_left_leg_theta_, wrapper_right_leg_theta_, wrapper_left_leg_theta_vel_, wrapper_right_leg_theta_vel_;
-  RosPidWrapper wrapper_left_wheel_vel_, wrapper_right_wheel_vel_;
-
-  // 核心算法实例
-  bipedal_wheel_core::BipedalWheelCore<
-      RosPidWrapper, RosLoggerWrapper,
-      RampFilter<double>, MovingAverageFilter<double>
-  > core_;
+  // Core algorithm instance, inject PID and logger wrapper inside
+  bipedal_wheel_core::BipedalWheelCore<RosPidWrapper, RosLoggerWrapper, RampFilter<double>, MovingAverageFilter<double>>
+      core_;
 };
 
 }  // namespace rm_chassis_controllers

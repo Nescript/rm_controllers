@@ -30,6 +30,21 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   {
     return false;
   }
+
+  // Cache static TF at init time if available
+  try
+  {
+    geometry_msgs::TransformStamped tf_msg;
+    tf_msg = robot_state_handle_.lookupTransform("base_link", imu_handle_.getFrameId(), ros::Time(0));
+    tf2::fromMsg(tf_msg.transform, imu2base_tf_);
+    base2imu_tf_ = imu2base_tf_.inverse();
+    is_tf_cached_ = true;
+  }
+  catch (tf2::TransformException& ex)
+  {
+    ROS_WARN("[BipedalController] Static TF IMU->base_link not available at init, will lookup lazily: %s", ex.what());
+  }
+
   return true;
 }
 
@@ -87,15 +102,38 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
 
   bipedal_wheel_core::SensorMeasurements sens_in{};
 
+  if (!is_tf_cached_)
+  {
+    try
+    {
+      geometry_msgs::TransformStamped tf_msg;
+      tf_msg = robot_state_handle_.lookupTransform("base_link", imu_handle_.getFrameId(), ros::Time(0));
+      tf2::fromMsg(tf_msg.transform, imu2base_tf_);
+      base2imu_tf_ = imu2base_tf_.inverse();
+      is_tf_cached_ = true;
+    }
+    catch (tf2::TransformException& ex)
+    {
+      ROS_WARN_ONCE("[BipedalController] Static TF IMU->base_link not available yet: %s", ex.what());
+      bipedal_wheel_core::ControlOutput zero_cmd{};
+      setJointCommands(joint_handles_, zero_cmd);
+      last_yaw_vel_ = 0.0;
+      return;
+    }
+  }
+
   try
   {
     // 将 imu 数据变换到 base link 坐标系
-    tf2::doTransform(gyro, angular_vel_base,
-                     robot_state_handle_.lookupTransform("base_link", imu_handle_.getFrameId(), time));
+    tf2::Vector3 gyro_tf2(gyro.x, gyro.y, gyro.z);
+    tf2::Vector3 angular_vel_base_tf2 = imu2base_tf_ * gyro_tf2;
+    angular_vel_base.x = angular_vel_base_tf2.x();
+    angular_vel_base.y = angular_vel_base_tf2.y();
+    angular_vel_base.z = angular_vel_base_tf2.z();
+
     // get imu to base transform
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg = robot_state_handle_.lookupTransform(imu_handle_.getFrameId(), "base_link", time);
-    tf2::fromMsg(tf_msg.transform, imu2base);
+    imu2base = base2imu_tf_;
+
     // get odom to imu transform
     tf2::Quaternion odom2imu_quaternion;
     tf2::Vector3 odom2imu_origin;
@@ -107,6 +145,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     odom2base = odom2imu * imu2base;
     quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
 
+    geometry_msgs::TransformStamped tf_msg;
     tf_msg.transform = tf2::toMsg(odom2imu.inverse());
     tf_msg.header.stamp = time;
     tf2::doTransform(acc, linear_acc_base, tf_msg);
@@ -158,10 +197,10 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   // 5. 组装输入指令 commands
   bipedal_wheel_core::ControllerCommands cmd_in{};
   cmd_in.vel_cmd << vel_cmd_.x, vel_cmd_.y, vel_cmd_.z;
-  cmd_in.leg_length_cmd = legCmd_;
-  cmd_in.jump_cmd = jumpCmd_;
+  cmd_in.leg_length_cmd = leg_length_cmd_;
+  cmd_in.jump_cmd = jump_cmd_;
   cmd_in.overturn = overturn_;
-  cmd_in.coeffs = coeffs_;
+  cmd_in.coeffs = &coeffs_;
 
   if (state_ == rm_msgs::ChassisCmd::RAW)
     cmd_in.base_state = 1;
@@ -262,8 +301,8 @@ bool BipedalController::initHardwareHandles(hardware_interface::RobotHW* robot_h
 bool BipedalController::initRosInterface(ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh)
 {
   auto legCmdCallback = [this](const rm_msgs::LegCmd::ConstPtr& msg) {
-    legCmd_ = msg->leg_length;
-    jumpCmd_ = msg->jump;
+    leg_length_cmd_ = msg->leg_length;
+    jump_cmd_ = msg->jump;
   };
   auto recoveryLegSpdTurnbackCb = [this](const std_msgs::Bool::ConstPtr& msg) {
     recovery_leg_spd_turnback_ = msg->data;
@@ -499,36 +538,36 @@ bool BipedalController::setupSpringParams(ros::NodeHandle& controller_nh)
 bool BipedalController::initCoreAlgorithm()
 {
   // 1. Initialize wrappers
-  wrapper_yaw_vel_.setPid(&pid_yaw_vel_);
-  wrapper_theta_diff_.setPid(&pid_theta_diff_);
-  wrapper_roll_.setPid(&pid_roll_);
-  wrapper_wheel_vel_diff_.setPid(&pid_wheel_vel_diff_);
+  pid_wrapper_yaw_vel_.setPid(&pid_yaw_vel_);
+  pid_wrapper_theta_diff_.setPid(&pid_theta_diff_);
+  pid_wrapper_roll_.setPid(&pid_roll_);
+  pid_wrapper_wheel_vel_diff_.setPid(&pid_wheel_vel_diff_);
 
-  wrapper_left_leg_.setPid(&pid_left_leg_);
-  wrapper_right_leg_.setPid(&pid_right_leg_);
-  wrapper_left_leg_stand_up_.setPid(&pid_left_leg_stand_up_);
-  wrapper_right_leg_stand_up_.setPid(&pid_right_leg_stand_up_);
+  pid_wrapper_left_leg_.setPid(&pid_left_leg_);
+  pid_wrapper_right_leg_.setPid(&pid_right_leg_);
+  pid_wrapper_left_leg_stand_up_.setPid(&pid_left_leg_stand_up_);
+  pid_wrapper_right_leg_stand_up_.setPid(&pid_right_leg_stand_up_);
 
-  wrapper_left_leg_theta_.setPid(&pid_left_leg_theta_);
-  wrapper_right_leg_theta_.setPid(&pid_right_leg_theta_);
-  wrapper_left_leg_theta_vel_.setPid(&pid_left_leg_theta_vel_);
-  wrapper_right_leg_theta_vel_.setPid(&pid_right_leg_theta_vel_);
+  pid_wrapper_left_leg_theta_.setPid(&pid_left_leg_theta_);
+  pid_wrapper_right_leg_theta_.setPid(&pid_right_leg_theta_);
+  pid_wrapper_left_leg_theta_vel_.setPid(&pid_left_leg_theta_vel_);
+  pid_wrapper_right_leg_theta_vel_.setPid(&pid_right_leg_theta_vel_);
 
-  wrapper_left_wheel_vel_.setPid(&pid_left_wheel_vel_);
-  wrapper_right_wheel_vel_.setPid(&pid_right_wheel_vel_);
+  pid_wrapper_left_wheel_vel_.setPid(&pid_left_wheel_vel_);
+  pid_wrapper_right_wheel_vel_.setPid(&pid_right_wheel_vel_);
 
   // 2. Populate wrapper vectors
-  wrapper_legs_ = { &wrapper_left_leg_, &wrapper_right_leg_ };
-  wrapper_legs_stand_up_ = { &wrapper_left_leg_stand_up_, &wrapper_right_leg_stand_up_ };
-  
-  wrapper_thetas_ = {
-    &wrapper_left_leg_theta_,
-    &wrapper_right_leg_theta_,
-    &wrapper_left_leg_theta_vel_,
-    &wrapper_right_leg_theta_vel_
+  pid_wrappers_legs_ = { &pid_wrapper_left_leg_, &pid_wrapper_right_leg_ };
+  pid_wrappers_legs_stand_up_ = { &pid_wrapper_left_leg_stand_up_, &pid_wrapper_right_leg_stand_up_ };
+
+  pid_wrappers_thetas_ = {
+    &pid_wrapper_left_leg_theta_,
+    &pid_wrapper_right_leg_theta_,
+    &pid_wrapper_left_leg_theta_vel_,
+    &pid_wrapper_right_leg_theta_vel_
   };
 
-  wrapper_wheels_ = { &wrapper_left_wheel_vel_, &wrapper_right_wheel_vel_ };
+  pid_wrappers_wheels_ = { &pid_wrapper_left_wheel_vel_, &pid_wrapper_right_wheel_vel_ };
 
   // 3. Assemble parameters
   bipedal_wheel_core::ControllerParams params{};
@@ -541,11 +580,11 @@ bool BipedalController::initCoreAlgorithm()
   params.default_leg_length = default_leg_length_;
 
   // 4. Initialize core algorithm
-  if (!core_.init(params, logger_wrapper_,
-                  wrapper_legs_, wrapper_legs_stand_up_,
-                  wrapper_thetas_, wrapper_wheels_,
-                  &wrapper_yaw_vel_, &wrapper_theta_diff_,
-                  &wrapper_roll_, &wrapper_wheel_vel_diff_))
+  if (!core_.init(params, logger_,
+                  pid_wrappers_legs_, pid_wrappers_legs_stand_up_,
+                  pid_wrappers_thetas_, pid_wrappers_wheels_,
+                  &pid_wrapper_yaw_vel_, &pid_wrapper_theta_diff_,
+                  &pid_wrapper_roll_, &pid_wrapper_wheel_vel_diff_))
   {
     ROS_ERROR("[BipedalController] Failed to initialize core algorithm.");
     return false;

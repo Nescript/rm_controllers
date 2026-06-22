@@ -146,7 +146,7 @@ struct ControllerCommands
   bool jump_cmd = false;
   double leg_length_cmd = 0.12;
   bool overturn = false;
-  Eigen::Matrix<double, 4, 12> coeffs = Eigen::Matrix<double, 4, 12>::Zero();
+  const Eigen::Matrix<double, 4, 12>* coeffs = nullptr;
 };
 
 // 核心算法内部估计的机器人绝对状态（可通过 Getter 接口暴露供 ROS 观测）
