@@ -99,15 +99,6 @@ enum JumpPhase
   IDLE,
 };
 
-enum BalanceMode
-{
-  NORMAL,
-  STAND_UP,
-  SIT_DOWN,
-  RECOVER,
-  UPSTAIRS,
-  PROTECT
-};
 
 enum Side
 {

@@ -12,7 +12,6 @@
 #include <rm_common/lqr.h>
 #include "rm_chassis_controllers/chassis_base.h"
 #include "bipedal_wheel/core/core_types.h"
-#include "bipedal_wheel/core/helper_functions.h"
 #include "bipedal_wheel/core/bipedal_wheel_core.h"
 #include "ros/node_handle.h"
 
@@ -102,8 +101,8 @@ public:
 
   // TF cache for IMU <-> base_link static transform
   bool is_tf_cached_ = false;
-  tf2::Transform imu2base_tf_; // IMU -> base_link
-  tf2::Transform base2imu_tf_; // base_link -> IMU
+  tf2::Transform imu2base_tf_;  // IMU -> base_link
+  tf2::Transform base2imu_tf_;  // base_link -> IMU
 
   // LQR weights & coefficients
   Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> q_;

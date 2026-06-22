@@ -75,16 +75,16 @@ inline void setJointCommands(std::vector<hardware_interface::JointHandle*>& join
 
 void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& period)
 {
-  // 1. Check state overrides for balance mode transitions
+  // Check state overrides for balance mode transitions
   if (state_ == rm_msgs::ChassisCmd::FALLEN)
   {
-    core_.setRobotMode(bipedal_wheel_core::RobotMode::FALLEN);
+    core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::FALLEN);
     core_.setBalanceStateChanged(false);
   }
   else if (!overturn_ && state_ == rm_msgs::ChassisCmd::RECOVERY)
   {
     overturn_ = true;
-    core_.setRobotMode(bipedal_wheel_core::RobotMode::GETTING_UP);
+    core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::GETTING_UP);
     core_.setBalanceStateChanged(false);
   }
 
@@ -234,7 +234,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
 
 void BipedalController::stopping(const ros::Time& time)
 {
-  core_.setRobotMode(bipedal_wheel_core::RobotMode::HANGING);
+  core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::HANGING);
   balance_state_changed_ = false;
   bipedal_wheel_core::ControlOutput zero_cmd{};
   setJointCommands(joint_handles_, zero_cmd);
@@ -560,31 +560,31 @@ bool BipedalController::initCoreAlgorithm()
   pid_wrappers_legs_ = { &pid_wrapper_left_leg_, &pid_wrapper_right_leg_ };
   pid_wrappers_legs_stand_up_ = { &pid_wrapper_left_leg_stand_up_, &pid_wrapper_right_leg_stand_up_ };
 
-  pid_wrappers_thetas_ = {
-    &pid_wrapper_left_leg_theta_,
-    &pid_wrapper_right_leg_theta_,
-    &pid_wrapper_left_leg_theta_vel_,
-    &pid_wrapper_right_leg_theta_vel_
-  };
+  pid_wrappers_thetas_ = { &pid_wrapper_left_leg_theta_, &pid_wrapper_right_leg_theta_,
+                           &pid_wrapper_left_leg_theta_vel_, &pid_wrapper_right_leg_theta_vel_ };
 
   pid_wrappers_wheels_ = { &pid_wrapper_left_wheel_vel_, &pid_wrapper_right_wheel_vel_ };
 
   // 3. Assemble parameters
   bipedal_wheel_core::ControllerParams params{};
-  if (model_params_) params.model_params = *model_params_;
-  if (chassis_geometry_params_) params.chassis_geometry = *chassis_geometry_params_;
-  if (spring_params_) params.spring = *spring_params_;
-  if (control_params_) params.control = *control_params_;
-  if (bias_params_) params.bias = *bias_params_;
-  if (leg_threshold_params_) params.threshold = *leg_threshold_params_;
+  if (model_params_)
+    params.model_params = *model_params_;
+  if (chassis_geometry_params_)
+    params.chassis_geometry = *chassis_geometry_params_;
+  if (spring_params_)
+    params.spring = *spring_params_;
+  if (control_params_)
+    params.control = *control_params_;
+  if (bias_params_)
+    params.bias = *bias_params_;
+  if (leg_threshold_params_)
+    params.threshold = *leg_threshold_params_;
   params.default_leg_length = default_leg_length_;
 
   // 4. Initialize core algorithm
-  if (!core_.init(params, logger_,
-                  pid_wrappers_legs_, pid_wrappers_legs_stand_up_,
-                  pid_wrappers_thetas_, pid_wrappers_wheels_,
-                  &pid_wrapper_yaw_vel_, &pid_wrapper_theta_diff_,
-                  &pid_wrapper_roll_, &pid_wrapper_wheel_vel_diff_))
+  if (!core_.init(params, logger_, pid_wrappers_legs_, pid_wrappers_legs_stand_up_, pid_wrappers_thetas_,
+                  pid_wrappers_wheels_, &pid_wrapper_yaw_vel_, &pid_wrapper_theta_diff_, &pid_wrapper_roll_,
+                  &pid_wrapper_wheel_vel_diff_))
   {
     ROS_ERROR("[BipedalController] Failed to initialize core algorithm.");
     return false;
@@ -592,8 +592,9 @@ bool BipedalController::initCoreAlgorithm()
   return true;
 }
 
-void BipedalController::polyfit(const std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>>& Ks, const std::vector<double>& L0s,
-                                Eigen::Matrix<double, 4, 12>& coeffs)
+void BipedalController::polyfit(
+    const std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>>& Ks,
+    const std::vector<double>& L0s, Eigen::Matrix<double, 4, 12>& coeffs)
 {
   int N = L0s.size();
   Eigen::MatrixXd A(N, 4), B(N, 12);
@@ -609,7 +610,7 @@ void BipedalController::polyfit(const std::vector<Eigen::Matrix<double, bipedal_
 geometry_msgs::Twist BipedalController::odometry()
 {
   geometry_msgs::Twist twist;
-  if (core_.getRobotMode() != bipedal_wheel_core::RobotMode::HANGING)
+  if (core_.getRobotMode() != bipedal_wheel_core::RobotPhysicalState::HANGING)
   {
     twist.linear.x = core_.getLqrStatus().dx;
     twist.angular.z = last_yaw_vel_;

@@ -5,12 +5,7 @@
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 class SitDown
 {
 public:
@@ -52,11 +47,11 @@ public:
       ctx.balance_state_changed = false;
       if (ctx.overturn)
       {
-        ctx.current_mode = RobotMode::GETTING_UP;
+        ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
       }
       else
       {
-        ctx.current_mode = RobotMode::STAND;
+        ctx.current_physical_state = RobotPhysicalState::STAND;
       }
       ctx.logger.info("[balance] Exit SIT_DOWN");
     }

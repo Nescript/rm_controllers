@@ -40,8 +40,9 @@ public:
   // Expose status metrics for telemetry and visualization
   const bipedal_wheel_core::LQRStatus& getLqrStatus() const
   { return lqr_status_; }
-  bipedal_wheel_core::RobotMode getRobotMode() const
+  bipedal_wheel_core::RobotPhysicalState getRobotMode() const
   { return robot_mode_; }
+  bipedal_wheel_core::FsmState getFsmState() const;
 
   const VMC* getLeftVmc() const
   { return left_vmc_.get(); }
@@ -66,13 +67,13 @@ public:
   { balance_state_changed_ = val; }
   void setRecoveryLegSpdTurnback(bool val)
   { recovery_leg_spd_turnback_ = val; }
-  void setRobotMode(bipedal_wheel_core::RobotMode val)
+  void setRobotMode(bipedal_wheel_core::RobotPhysicalState val)
   { robot_mode_ = val; }
 
 private:
   bipedal_wheel_core::ControllerParams config_;
   bipedal_wheel_core::LQRStatus lqr_status_;
-  bipedal_wheel_core::RobotMode robot_mode_ = bipedal_wheel_core::RobotMode::HANGING;
+  bipedal_wheel_core::RobotPhysicalState robot_mode_ = bipedal_wheel_core::RobotPhysicalState::HANGING;
 
   std::unique_ptr<VMC> left_vmc_;
   std::unique_ptr<VMC> right_vmc_;

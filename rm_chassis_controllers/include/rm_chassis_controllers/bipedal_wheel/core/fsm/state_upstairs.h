@@ -55,7 +55,7 @@ public:
         right_pos.L0 < ctx.config.threshold.upstair_exit_length_threshold)
     {
       // (leg length status can be monitored by wrapper observing state change to STAND_UP)
-      ctx.current_mode = RobotMode::GETTING_UP;  // GETTING_UP maps to StandUp
+      ctx.current_physical_state = RobotPhysicalState::GETTING_UP;  // GETTING_UP maps to StandUp
       ctx.balance_state_changed = false;
       ctx.logger.info("[balance] Exit Upstairs");
     }

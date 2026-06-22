@@ -4,18 +4,12 @@
 #include "bipedal_wheel/core/helper_functions.h"
 #include <cmath>
 #include <memory>
-#include <algorithm>
 #include <Eigen/Dense>
 
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 class Normal
 {
 public:
@@ -35,7 +29,7 @@ public:
       // We can reset our local variables here
       jump_phase_ = JumpPhase::IDLE;
       pos_des_ = 0.0;
-      jump_cooldown_counter_ = ctx.config.control.jump_over_time; // Allow immediate jump
+      jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
       ctx.balance_state_changed = true;
     }
 
@@ -87,7 +81,7 @@ public:
     double current_leg_length = (left_pos.L0 + right_pos.L0) / 2.0;
     if (std::abs(ctx.lqr_status.dx) < 0.1 && std::abs(ctx.cmd_in.vel_cmd.x()) < 0.01)
     {
-      ctx.recovery_leg_spd_turnback = false; // maps to setMoveFlag(false)
+      ctx.recovery_leg_spd_turnback = false;  // maps to setMoveFlag(false)
       if (x_offset_flag_)
       {
         x_offset_flag_ = false;
@@ -99,7 +93,8 @@ public:
     double friction_circle_alpha = std::abs(friction_circle) > 10.0 ? (10.0 / std::abs(friction_circle)) : 1.0;
 
     // PID Commands
-    double T_yaw = ctx.pid_yaw_vel->computeCommand(friction_circle_alpha * ctx.cmd_in.vel_cmd.z() - chassis_state.angular_vel.z(), ctx.dt);
+    double T_yaw = ctx.pid_yaw_vel->computeCommand(
+        friction_circle_alpha * ctx.cmd_in.vel_cmd.z() - chassis_state.angular_vel.z(), ctx.dt);
     double theta_diff = right_pos.theta - left_pos.theta;
     double T_theta_diff = ctx.pid_theta_diff->computeCommand(theta_diff, ctx.dt);
     double F_roll = ctx.pid_roll->computeCommand(0.0 - chassis_state.roll, ctx.dt);
@@ -119,10 +114,12 @@ public:
     {
       for (int j = 0; j < 6; ++j)
       {
-        k_left(i, j) = coeffs_(0, i + 2 * j) * std::pow(left_pos.L0, 3) + coeffs_(1, i + 2 * j) * std::pow(left_pos.L0, 2) +
-                       coeffs_(2, i + 2 * j) * left_pos.L0 + coeffs_(3, i + 2 * j);
-        k_right(i, j) = coeffs_(0, i + 2 * j) * std::pow(right_pos.L0, 3) + coeffs_(1, i + 2 * j) * std::pow(right_pos.L0, 2) +
-                        coeffs_(2, i + 2 * j) * right_pos.L0 + coeffs_(3, i + 2 * j);
+        k_left(i, j) = coeffs_(0, i + 2 * j) * std::pow(left_pos.L0, 3) +
+                       coeffs_(1, i + 2 * j) * std::pow(left_pos.L0, 2) + coeffs_(2, i + 2 * j) * left_pos.L0 +
+                       coeffs_(3, i + 2 * j);
+        k_right(i, j) = coeffs_(0, i + 2 * j) * std::pow(right_pos.L0, 3) +
+                        coeffs_(1, i + 2 * j) * std::pow(right_pos.L0, 2) + coeffs_(2, i + 2 * j) * right_pos.L0 +
+                        coeffs_(3, i + 2 * j);
       }
     }
 
@@ -137,7 +134,7 @@ public:
     if (ctx.complete_stand)
     {
       x_left_ref(POS) = x_right_ref(POS) = pos_des_;
-      if (ctx.cmd_in.base_state != 1) // RAW = 1
+      if (ctx.cmd_in.base_state != 1)  // RAW = 1
       {
         x_left_ref(VEL) = x_right_ref(VEL) = friction_circle_alpha * ctx.cmd_in.vel_cmd.x();
       }
@@ -197,19 +194,23 @@ public:
     // Compute leg thrust forces
     double gravity = ctx.config.model_params.f_gravity;
     // Spring forces
-    double left_spring_force = f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
-    double right_spring_force = f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+    double left_spring_force =
+        f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+    double right_spring_force =
+        f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
 
-    double F_inertia_left = ctx.config.model_params.M * friction_circle * left_pos.L0 / ctx.config.chassis_geometry.wheel_track;
-    double F_inertia_right = ctx.config.model_params.M * friction_circle * right_pos.L0 / ctx.config.chassis_geometry.wheel_track;
+    double F_inertia_left =
+        ctx.config.model_params.M * friction_circle * left_pos.L0 / ctx.config.chassis_geometry.wheel_track;
+    double F_inertia_right =
+        ctx.config.model_params.M * friction_circle * right_pos.L0 / ctx.config.chassis_geometry.wheel_track;
 
     double F_pid_left = 0.0, F_pid_right = 0.0, T_wheel_diff = 0.0;
     Eigen::Matrix<double, 2, 1> F_leg = Eigen::Matrix<double, 2, 1>::Zero();
 
     // Check jump sequence
     jump_cooldown_counter_ += ctx.dt;
-    if (jump_phase_ == JumpPhase::IDLE &&
-        jump_cooldown_counter_ > ctx.config.control.jump_over_time && ctx.cmd_in.jump_cmd)
+    if (jump_phase_ == JumpPhase::IDLE && jump_cooldown_counter_ > ctx.config.control.jump_over_time &&
+        ctx.cmd_in.jump_cmd)
     {
       jump_phase_ = JumpPhase::LEG_RETRACTION;
       jump_cooldown_counter_ = 0.0;
@@ -220,8 +221,10 @@ public:
     {
       static double last_left_length_des = leg_length_des;
       static double last_right_length_des = leg_length_des;
-      double left_length_des = ctx.complete_stand ? (0.8 * leg_length_des + 0.2 * last_left_length_des) : ctx.config.default_leg_length;
-      double right_length_des = ctx.complete_stand ? (0.8 * leg_length_des + 0.2 * last_right_length_des) : ctx.config.default_leg_length;
+      double left_length_des =
+          ctx.complete_stand ? (0.8 * leg_length_des + 0.2 * last_left_length_des) : ctx.config.default_leg_length;
+      double right_length_des =
+          ctx.complete_stand ? (0.8 * leg_length_des + 0.2 * last_right_length_des) : ctx.config.default_leg_length;
       last_left_length_des = left_length_des;
       last_right_length_des = right_length_des;
 
@@ -233,7 +236,8 @@ public:
       F_leg[LEFT] = F_pid_left - F_inertia_left + gravity / std::cos(left_pos.theta) + F_roll - left_spring_force;
       F_leg[RIGHT] = F_pid_right + F_inertia_right + gravity / std::cos(right_pos.theta) - F_roll - right_spring_force;
 
-      T_wheel_diff = (ctx.cmd_in.base_state == 1) ? ctx.pid_wheel_vel_diff->computeCommand(0.0, ctx.dt) : 0.0; // wheel difference PID
+      T_wheel_diff = (ctx.cmd_in.base_state == 1) ? ctx.pid_wheel_vel_diff->computeCommand(0.0, ctx.dt) :
+                                                    0.0;  // wheel difference PID
     }
     else
     {
@@ -241,9 +245,12 @@ public:
       // In normal.cpp: jumpLengthDes contains target retraction, jump up, and off ground leg lengths
       // retraction: 0.11, jump_up: 0.34, off_ground: 0.11
       double target_jump_len = 0.12;
-      if (jump_phase_ == JumpPhase::LEG_RETRACTION) target_jump_len = 0.11;
-      else if (jump_phase_ == JumpPhase::JUMP_UP) target_jump_len = 0.34;
-      else if (jump_phase_ == JumpPhase::OFF_GROUND) target_jump_len = 0.11;
+      if (jump_phase_ == JumpPhase::LEG_RETRACTION)
+        target_jump_len = 0.11;
+      else if (jump_phase_ == JumpPhase::JUMP_UP)
+        target_jump_len = 0.34;
+      else if (jump_phase_ == JumpPhase::OFF_GROUND)
+        target_jump_len = 0.11;
 
       double s_left = (left_pos.L0 - 0.12) / (0.35 - 0.11);
       double s_right = (right_pos.L0 - 0.12) / (0.35 - 0.11);
@@ -289,7 +296,8 @@ public:
           double s_left_flip = 1.0 - s_left;
           double s_right_flip = 1.0 - s_right;
           F_leg(LEFT) = -175 * (1 - 3 * std::pow(s_left_flip, 2) + 2 * std::pow(s_left_flip, 3)) - left_spring_force;
-          F_leg(RIGHT) = -175 * (1 - 3 * std::pow(s_right_flip, 2) + 2 * std::pow(s_right_flip, 3)) - right_spring_force;
+          F_leg(RIGHT) =
+              -175 * (1 - 3 * std::pow(s_right_flip, 2) + 2 * std::pow(s_right_flip, 3)) - right_spring_force;
 
           if (current_leg_length < target_jump_len + 0.02)
           {
@@ -299,7 +307,7 @@ public:
           {
             jumpTime_ = 0;
             jump_phase_ = JumpPhase::IDLE;
-            jump_cooldown_counter_ = 0.0; // Reset cooldown
+            jump_cooldown_counter_ = 0.0;  // Reset cooldown
             ctx.logger.info("[balance] Jump end");
           }
           break;
@@ -318,14 +326,17 @@ public:
     {
       left_unstick = right_unstick = true;
     }
-    else if (ctx.complete_stand && jump_phase_ != JumpPhase::LEG_RETRACTION && ctx.cmd_in.base_state == 2) // FOLLOW = 2
+    else if (ctx.complete_stand && jump_phase_ != JumpPhase::LEG_RETRACTION &&
+             ctx.cmd_in.base_state == 2)  // FOLLOW = 2
     {
-      left_unstick = unstickDetection_left(last_unstick_l_ ? F_pid_left : ctx.left_vmc->getForceReal().F + left_spring_force,
-                                           u_left(LEG_Tp), left_spd.dL0, left_pos.L0, chassis_state.linear_acc.z(),
-                                           ctx.config.model_params, x_left, ctx.dt);
-      right_unstick = unstickDetection_right(last_unstick_r_ ? F_pid_right : ctx.right_vmc->getForceReal().F + right_spring_force,
-                                             u_right(LEG_Tp), right_spd.dL0, right_pos.L0, chassis_state.linear_acc.z(),
-                                             ctx.config.model_params, x_right, ctx.dt);
+      left_unstick =
+          unstickDetection_left(last_unstick_l_ ? F_pid_left : ctx.left_vmc->getForceReal().F + left_spring_force,
+                                u_left(LEG_Tp), left_spd.dL0, left_pos.L0, chassis_state.linear_acc.z(),
+                                ctx.config.model_params, x_left, ctx.dt);
+      right_unstick =
+          unstickDetection_right(last_unstick_r_ ? F_pid_right : ctx.right_vmc->getForceReal().F + right_spring_force,
+                                 u_right(LEG_Tp), right_spd.dL0, right_pos.L0, chassis_state.linear_acc.z(),
+                                 ctx.config.model_params, x_right, ctx.dt);
     }
 
     last_unstick_l_ = left_unstick;
@@ -364,10 +375,11 @@ public:
     // Transitions
     // Upstairs transition
     if (jump_phase_ == JumpPhase::IDLE && ctx.complete_stand && std::abs(x_left(0) + x_right(0)) / 2.0 > 0.50 &&
-        std::abs(ctx.cmd_in.vel_cmd.x()) > 0.1 && std::abs(x_left(3)) > 0.1 && ((left_pos.L0 + right_pos.L0) / 2.0) > 0.30 &&
-        leg_length_des > 0.30)
+        std::abs(ctx.cmd_in.vel_cmd.x()) > 0.1 && std::abs(x_left(3)) > 0.1 &&
+        ((left_pos.L0 + right_pos.L0) / 2.0) > 0.30 && leg_length_des > 0.30)
     {
-      ctx.current_mode = RobotMode::STAND; // upstairs transition in core FSM (or custom upstairs mode)
+      ctx.current_physical_state =
+          RobotPhysicalState::STAND;  // upstairs transition in core FSM (or custom upstairs mode)
       // Note: Upstairs is maps to another FSM state
       ctx.balance_state_changed = false;
       ctx.complete_stand = false;
@@ -380,11 +392,12 @@ public:
       if ((std::abs(x_left(0)) > 0.6 || std::abs(x_right(0)) > 0.6 || std::abs(chassis_state.pitch) > 0.4 ||
            std::abs(chassis_state.roll) > 0.4) ||
           (std::abs(u_left(0)) + std::abs(u_right(0)) / 2.0 > 30.0) ||
-          (std::abs(ctx.lqr_status.dx - x_left_ref(VEL)) > 5.0 && std::abs(ctx.lqr_status.dx - ctx.cmd_in.vel_cmd.x()) > 5.0))
+          (std::abs(ctx.lqr_status.dx - x_left_ref(VEL)) > 5.0 &&
+           std::abs(ctx.lqr_status.dx - ctx.cmd_in.vel_cmd.x()) > 5.0))
       {
         protect_flag_ = true;
         leg_length_des = ctx.config.default_leg_length;
-        ctx.current_mode = RobotMode::HANGING; // HANGING maps to Protect
+        ctx.current_physical_state = RobotPhysicalState::HANGING;  // HANGING maps to Protect
         ctx.balance_state_changed = false;
         ctx.complete_stand = false;
         ctx.logger.info("[balance] Exit NORMAL");
@@ -394,9 +407,9 @@ public:
     // Protection to sit_down
     if (std::abs(x_left(THETA)) > 1.0 || std::abs(x_right(THETA)) > 1.0 || std::abs(chassis_state.pitch) > 0.6 ||
         std::abs(chassis_state.roll) > 0.8 || ctx.overturn || std::abs(theta_diff) > 1.0 ||
-        ctx.cmd_in.base_state == 3) // FALLEN = 3
+        ctx.cmd_in.base_state == 3)  // FALLEN = 3
     {
-      ctx.current_mode = RobotMode::FALLEN; // FALLEN maps to SitDown
+      ctx.current_physical_state = RobotPhysicalState::FALLEN;  // FALLEN maps to SitDown
       ctx.balance_state_changed = false;
       ctx.complete_stand = false;
       ctx.logger.info("[balance] Exit NORMAL");
@@ -438,7 +451,8 @@ private:
   }
 
   bool unstickDetection_left(double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
-                             const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x, double dt)
+                             const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x,
+                             double dt)
   {
     double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, dt, true);
     leftSupportForceAveragePtr_->input(Fn);
@@ -468,7 +482,8 @@ private:
   }
 
   bool unstickDetection_right(double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
-                              const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x, double dt)
+                              const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x,
+                              double dt)
   {
     double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, dt, false);
     rightSupportForceAveragePtr_->input(Fn);

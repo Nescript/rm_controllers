@@ -4,17 +4,11 @@
 #include "bipedal_wheel/core/helper_functions.h"
 #include <cmath>
 #include <memory>
-#include <algorithm>
 
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 class Protect
 {
 public:
@@ -65,8 +59,10 @@ public:
     F_pid_left = std::abs(F_pid_left) > 200 ? std::copysign(1.0, F_pid_left) * 200 : F_pid_left;
     F_pid_right = std::abs(F_pid_right) > 200 ? std::copysign(1.0, F_pid_right) * 200 : F_pid_right;
 
-    double left_force = F_pid_left - f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
-    double right_force = F_pid_right - f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+    double left_force =
+        F_pid_left - f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+    double right_force =
+        F_pid_right - f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
 
     double T_theta_diff = ctx.pid_theta_diff->computeCommand(right_pos.theta - left_pos.theta, ctx.dt);
     double left_torque = ctx.pid_thetas[0]->computeCommand(theta_des_l - left_pos.theta, ctx.dt) + T_theta_diff;
@@ -74,12 +70,14 @@ public:
 
     double T_yaw = ctx.pid_yaw_vel->computeCommand(ctx.cmd_in.vel_cmd.z() - chassis_state.angular_vel.z(), ctx.dt);
     double left_wheel_cmd =
-        ctx.pid_wheels[0]->computeCommand(left_wheel_desired_vel - ctx.sens_in.leg_state[LEFT].wheel.vel, ctx.dt) - T_yaw;
+        ctx.pid_wheels[0]->computeCommand(left_wheel_desired_vel - ctx.sens_in.leg_state[LEFT].wheel.vel, ctx.dt) -
+        T_yaw;
     double right_wheel_cmd =
-        ctx.pid_wheels[1]->computeCommand(right_wheel_desired_vel - ctx.sens_in.leg_state[RIGHT].wheel.vel, ctx.dt) + T_yaw;
+        ctx.pid_wheels[1]->computeCommand(right_wheel_desired_vel - ctx.sens_in.leg_state[RIGHT].wheel.vel, ctx.dt) +
+        T_yaw;
 
-    double left_input[2] = {0.0, 0.0};
-    double right_input[2] = {0.0, 0.0};
+    double left_input[2] = { 0.0, 0.0 };
+    double right_input[2] = { 0.0, 0.0 };
     ctx.left_vmc->leg_conv(left_force, left_torque, left_input);
     ctx.right_vmc->leg_conv(right_force, right_torque, right_input);
 
@@ -98,14 +96,13 @@ public:
     if (std::abs(chassis_state.pitch) < 0.3 && std::abs(chassis_state.angular_vel.y()) < 0.2 &&
         std::abs(left_pos.theta + right_pos.theta) / 2.0 < 0.2)
     {
-      ctx.current_mode = RobotMode::STAND; // STAND maps to Normal
+      ctx.current_physical_state = RobotPhysicalState::STAND;  // STAND maps to Normal
       ctx.balance_state_changed = false;
       ctx.logger.info("[balance] Exit PROTECT");
     }
-    else if (std::abs(chassis_state.angular_vel.y()) < 0.1 && ctx.overturn &&
-             ctx.cmd_in.base_state != 3) // FALLEN = 3
+    else if (std::abs(chassis_state.angular_vel.y()) < 0.1 && ctx.overturn && ctx.cmd_in.base_state != 3)  // FALLEN = 3
     {
-      ctx.current_mode = RobotMode::GETTING_UP; // GETTING_UP maps to Recover
+      ctx.current_physical_state = RobotPhysicalState::GETTING_UP;  // GETTING_UP maps to Recover
       ctx.balance_state_changed = false;
       ctx.logger.info("[balance] Exit PROTECT");
     }

@@ -61,15 +61,15 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
   // 2. Perform state machine switching if balance_state_changed_ is false
   if (!balance_state_changed_)
   {
-    if (robot_mode_ == RobotMode::FALLEN)
+    if (robot_mode_ == RobotPhysicalState::FALLEN)
     {
       FSM_variant_ = SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
     }
-    else if (robot_mode_ == RobotMode::HANGING)
+    else if (robot_mode_ == RobotPhysicalState::HANGING)
     {
       FSM_variant_ = Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
     }
-    else if (robot_mode_ == RobotMode::GETTING_UP)
+    else if (robot_mode_ == RobotPhysicalState::GETTING_UP)
     {
       if (overturn_)
       {
@@ -80,7 +80,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
         FSM_variant_ = StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
       }
     }
-    else if (robot_mode_ == RobotMode::STAND)
+    else if (robot_mode_ == RobotPhysicalState::STAND)
     {
       if (std::holds_alternative<Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_))
       {
@@ -106,38 +106,34 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
 
   // 4. Create context for state execution
   ControlOutput control_output{};
-  FsmContext<PidType, LoggerType, RampFilterType, MovingAverageFilterType> ctx{
-    config_,
-    sens_in,
-    cmd_in,
-    control_output,
-    lqr_status_,
-    robot_mode_,
-    complete_stand_,
-    overturn_,
-    move_flag_,
-    balance_state_changed_,
-    recovery_leg_spd_turnback_,
-    left_vmc_.get(),
-    right_vmc_.get(),
-    dt,
-    *logger_,
-    active_pid_legs_,
-    pid_thetas_,
-    pid_wheels_,
-    pid_yaw_vel_,
-    pid_theta_diff_,
-    pid_roll_,
-    pid_wheel_vel_diff_
-  };
+  FsmContext<PidType, LoggerType, RampFilterType, MovingAverageFilterType> ctx{ config_,
+                                                                                sens_in,
+                                                                                cmd_in,
+                                                                                control_output,
+                                                                                lqr_status_,
+                                                                                robot_mode_,
+                                                                                complete_stand_,
+                                                                                overturn_,
+                                                                                move_flag_,
+                                                                                balance_state_changed_,
+                                                                                recovery_leg_spd_turnback_,
+                                                                                left_vmc_.get(),
+                                                                                right_vmc_.get(),
+                                                                                dt,
+                                                                                *logger_,
+                                                                                active_pid_legs_,
+                                                                                pid_thetas_,
+                                                                                pid_wheels_,
+                                                                                pid_yaw_vel_,
+                                                                                pid_theta_diff_,
+                                                                                pid_roll_,
+                                                                                pid_wheel_vel_diff_ };
 
   // 5. Run active state
-  std::visit([&ctx](auto& state) {
-    state.execute(ctx);
-  }, FSM_variant_);
+  std::visit([&ctx](auto& state) { state.execute(ctx); }, FSM_variant_);
 
   // 6. Update core's member variables from the context
-  robot_mode_ = ctx.current_mode;
+  robot_mode_ = ctx.current_physical_state;
   complete_stand_ = ctx.complete_stand;
   overturn_ = ctx.overturn;
   move_flag_ = ctx.move_flag;
@@ -147,16 +143,11 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
   return control_output;
 }
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::reset()
 {
   lqr_status_ = bipedal_wheel_core::LQRStatus{};
-  robot_mode_ = bipedal_wheel_core::RobotMode::HANGING;
+  robot_mode_ = bipedal_wheel_core::RobotPhysicalState::HANGING;
   complete_stand_ = false;
   overturn_ = false;
   move_flag_ = false;
@@ -257,17 +248,39 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
     overturn_ = false;
   }
 
-  lqr_status_.dx = (cmd_in.base_state != 1) ? x_hat(0) : 0.0; // base_state 1 is RAW
-  
+  lqr_status_.dx = (cmd_in.base_state != 1) ? x_hat(0) : 0.0;  // base_state 1 is RAW
+
   if (cmd_in.base_state != 1 && std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01)
   {
     lqr_status_.x += lqr_status_.dx * dt;
   }
   else
   {
-    move_flag_ = true; // resets position and indicates moving state
+    move_flag_ = true;  // resets position and indicates moving state
     lqr_status_.x = 0.0;
   }
+}
+
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
+FsmState BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::getFsmState() const
+{
+  return std::visit(
+      [](const auto& state) -> FsmState {
+        using T = std::decay_t<decltype(state)>;
+        if constexpr (std::is_same_v<T, SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::SIT_DOWN;
+        else if constexpr (std::is_same_v<T, StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::STAND_UP;
+        else if constexpr (std::is_same_v<T, Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::NORMAL;
+        else if constexpr (std::is_same_v<T, Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::RECOVER;
+        else if constexpr (std::is_same_v<T, Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::UPSTAIRS;
+        else if constexpr (std::is_same_v<T, Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
+          return FsmState::PROTECT;
+      },
+      FSM_variant_);
 }
 
 }  // namespace bipedal_wheel_core

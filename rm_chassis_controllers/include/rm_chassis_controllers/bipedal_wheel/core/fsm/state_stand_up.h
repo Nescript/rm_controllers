@@ -4,17 +4,11 @@
 #include "bipedal_wheel/core/helper_functions.h"
 #include <cmath>
 #include <memory>
-#include <algorithm>
 
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 class StandUp
 {
   struct StandUpLegCommand
@@ -41,7 +35,7 @@ public:
       ctx.balance_state_changed = true;
       ctx.complete_stand = false;
       left_arrive_flag_ = right_arrive_flag_ = false;
-      
+
       // Obtain joint status state vector of left and right legs
       // For index mappings: 0 is THETA. Let's build a dummy pitch/theta check
       // Wait, we can pass double theta directly, or use getters.
@@ -53,19 +47,20 @@ public:
     const auto& left_pos = ctx.left_vmc->getPos();
     const auto& right_pos = ctx.right_vmc->getPos();
 
-    double left_spring_force = -f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
-    double right_spring_force = -f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+    double left_spring_force =
+        -f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+    double right_spring_force =
+        -f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
 
     LegCommand left_cmd{};
     LegCommand right_cmd{};
 
     // setUpLegMotion takes inputs and outputs
-    setUpLegMotion(left_pos.theta, left_pos.L0, left_pos.theta, ctx.config.threshold,
-                   right_leg_orientation, left_leg_orientation, left_leg_command_,
-                   left_stop_, left_arrive_flag_, left_arrive_time_, ctx.dt);
-    setUpLegMotion(right_pos.theta, right_pos.L0, right_pos.theta, ctx.config.threshold,
-                   left_leg_orientation, right_leg_orientation, right_leg_command_,
-                   right_stop_, right_arrive_flag_, right_arrive_time_, ctx.dt);
+    setUpLegMotion(left_pos.theta, left_pos.L0, left_pos.theta, ctx.config.threshold, right_leg_orientation,
+                   left_leg_orientation, left_leg_command_, left_stop_, left_arrive_flag_, left_arrive_time_, ctx.dt);
+    setUpLegMotion(right_pos.theta, right_pos.L0, right_pos.theta, ctx.config.threshold, left_leg_orientation,
+                   right_leg_orientation, right_leg_command_, right_stop_, right_arrive_flag_, right_arrive_time_,
+                   ctx.dt);
 
     ramp_length_des_l_->input(left_leg_command_.desired_length);
     ramp_angle_des_l_->input(left_leg_command_.desired_angle);
@@ -97,25 +92,24 @@ public:
         ((std::abs(left_pos.theta) < 0.3 && left_leg_orientation == LegOrientation::UNDER) &&
          (std::abs(right_pos.theta) < 0.3 && right_leg_orientation == LegOrientation::UNDER)))
     {
-      ctx.current_mode = RobotMode::STAND;
+      ctx.current_physical_state = RobotPhysicalState::STAND;
       ctx.balance_state_changed = false;
       ctx.logger.info("[balance] Exit STAND_UP");
     }
-    
+
     if (ctx.cmd_in.overturn)
     {
-      ctx.current_mode = RobotMode::GETTING_UP;
+      ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
       ctx.balance_state_changed = false;
       ctx.logger.info("[balance] Exit STAND_UP");
     }
   }
 
 private:
-  void setUpLegMotion(double theta, double leg_length, double leg_theta,
-                      const LegStateThresholdParams& threshold,
+  void setUpLegMotion(double theta, double leg_length, double leg_theta, const LegStateThresholdParams& threshold,
                       const LegOrientation& other_leg_orientation, LegOrientation& leg_orientation,
-                      StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag,
-                      double& arrive_time_counter, double dt)
+                      StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag, double& arrive_time_counter,
+                      double dt)
   {
     (void)theta;
     switch (leg_orientation)
@@ -141,7 +135,7 @@ private:
           legCommand.desired_angle_vel = -1.5;
         }
         // Instead of time-stamp differences, use a dt counter to avoid ROS dependency
-        if (std::abs(leg_theta) < 0.1) // approximate pitch angular vel
+        if (std::abs(leg_theta) < 0.1)  // approximate pitch angular vel
         {
           if (leg_theta > 0 && leg_theta < M_PI_2 + 0.4)
           {
@@ -171,12 +165,12 @@ private:
     }
   }
 
-  void detectLegState(double theta, const LegStateThresholdParams& threshold, LegOrientation& leg_orientation, LoggerType& logger)
+  void detectLegState(double theta, const LegStateThresholdParams& threshold, LegOrientation& leg_orientation,
+                      LoggerType& logger)
   {
     if (theta > threshold.under_lower && theta < threshold.under_upper)
       leg_orientation = LegOrientation::UNDER;
-    else if ((theta < threshold.front_lower && theta > -M_PI) ||
-             (theta < M_PI && theta > threshold.front_upper))
+    else if ((theta < threshold.front_lower && theta > -M_PI) || (theta < M_PI && theta > threshold.front_upper))
       leg_orientation = LegOrientation::FRONT;
     else if (theta > threshold.behind_lower && theta < threshold.behind_upper)
       leg_orientation = LegOrientation::BEHIND;
@@ -195,11 +189,9 @@ private:
     }
   }
 
-  LegCommand computePidLegCommand(const StandUpLegCommand& leg_command, VMC* vmc_,
-                                  PidType& length_pid, PidType& angle_pid,
-                                  PidType& angle_vel_pid,
-                                  const LegOrientation& leg_orientation, double dt,
-                                  double feedforward_force)
+  LegCommand computePidLegCommand(const StandUpLegCommand& leg_command, VMC* vmc_, PidType& length_pid,
+                                  PidType& angle_pid, PidType& angle_vel_pid, const LegOrientation& leg_orientation,
+                                  double dt, double feedforward_force)
   {
     LegCommand cmd{};
 
@@ -236,14 +228,13 @@ private:
     double torque = 0.0;
     if (leg_orientation == LegOrientation::BEHIND || leg_orientation == LegOrientation::UNDER)
     {
-      torque =
-          angle_pid.computeCommand(-shortest_angular_distance(leg_command.desired_angle, leg_pos.theta), dt);
+      torque = angle_pid.computeCommand(-shortest_angular_distance(leg_command.desired_angle, leg_pos.theta), dt);
     }
     else
     {
       torque = angle_vel_pid.computeCommand(leg_command.desired_angle_vel - leg_spd.dTheta, dt);
     }
-    double input[2] = {0.0, 0.0};
+    double input[2] = { 0.0, 0.0 };
     vmc_->leg_conv(force + F_leg_comp, torque + Tp_leg_comp, input);
     cmd.hip.effort = input[0];
     cmd.knee.effort = input[1];

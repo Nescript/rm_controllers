@@ -3,18 +3,11 @@
 #include "bipedal_wheel/core/fsm/fsm_context.h"
 #include "bipedal_wheel/core/helper_functions.h"
 #include <cmath>
-#include <memory>
-#include <algorithm>
 
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 class Recover
 {
   enum RecoveryChassisState
@@ -69,10 +62,12 @@ public:
     leg_theta_diff_ = shortest_angular_distance(left_pos.theta, right_pos.theta);
     double T_theta_diff = 0.0, feedforward_force = 0.0;
 
-    if (ctx.cmd_in.base_state != 4 && detectd_flag_) // base_state 4 corresponds to PROTECT/SITDOWN/etc.
+    if (ctx.cmd_in.base_state != 4 && detectd_flag_)  // base_state 4 corresponds to PROTECT/SITDOWN/etc.
     {
-      double left_force = ctx.pid_legs[0]->computeCommand(desired_leg_length_ - left_pos.L0, ctx.dt) + feedforward_force;
-      double right_force = ctx.pid_legs[1]->computeCommand(desired_leg_length_ - right_pos.L0, ctx.dt) + feedforward_force;
+      double left_force =
+          ctx.pid_legs[0]->computeCommand(desired_leg_length_ - left_pos.L0, ctx.dt) + feedforward_force;
+      double right_force =
+          ctx.pid_legs[1]->computeCommand(desired_leg_length_ - right_pos.L0, ctx.dt) + feedforward_force;
       double left_torque = 0.0;
       double right_torque = 0.0;
 
@@ -82,8 +77,8 @@ public:
         leg_recovery_velocity_ = -leg_recovery_velocity_;
       }
 
-      double left_input[2] = {0.0, 0.0};
-      double right_input[2] = {0.0, 0.0};
+      double left_input[2] = { 0.0, 0.0 };
+      double right_input[2] = { 0.0, 0.0 };
 
       if (chassis_state.roll < -0.5)
       {
@@ -140,7 +135,8 @@ public:
             left_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
             right_leg_recovery_feed_forward_ = left_leg_recovery_feed_forward_;
             ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque + T_theta_diff, left_input);
-            ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque - T_theta_diff, right_input);
+            ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque - T_theta_diff,
+                                    right_input);
           }
         }
       }
@@ -160,9 +156,9 @@ public:
     // Exit conditions
     if (std::abs(chassis_state.pitch) < 0.2 && chassis_state.linear_acc.z() > 5.0 && !ctx.overturn)
     {
-      ctx.current_mode = RobotMode::FALLEN; // FALLEN maps to SitDown
+      ctx.current_physical_state = RobotPhysicalState::FALLEN;  // FALLEN maps to SitDown
       ctx.balance_state_changed = false;
-      ctx.overturn = false; // maps to clearRecoveryFlag()
+      ctx.overturn = false;  // maps to clearRecoveryFlag()
       ctx.logger.info("[balance] Exit RECOVER");
     }
   }
@@ -184,6 +180,7 @@ private:
 
   void detectLegRecoveryState(LegRecoveryState& leg_recovery_state, double leg_pos, LoggerType& logger)
   {
+    LegRecoveryState old_state = leg_recovery_state;
     if (recovery_chassis_state_ == RecoveryChassisState::ForwardSlip)
     {
       if ((leg_pos < M_PI && leg_pos > M_PI - 0.3) || (leg_pos < (-M_PI_2 + 0.4) && leg_pos > -M_PI))
@@ -206,7 +203,10 @@ private:
         leg_recovery_state = NotReady;
       }
     }
-    logger.info("Leg recovery state: " + std::to_string(leg_recovery_state));
+    if (leg_recovery_state != old_state)
+    {
+      logger.info("Leg recovery state: " + std::to_string(leg_recovery_state));
+    }
   }
 
   double leg_recovery_velocity_ = 5.0;

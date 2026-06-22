@@ -9,12 +9,22 @@ namespace bipedal_wheel_core
 {
 
 // 机器人状态机枚举
-enum class RobotMode
+enum class RobotPhysicalState
 {
   HANGING = 0,  // 挂起/悬空状态
   FALLEN,       // 倾覆/倒地状态
   GETTING_UP,   // 试图起立中
   STAND         // 平衡站立控制状态
+};
+
+enum class FsmState
+{
+  SIT_DOWN,
+  STAND_UP,
+  NORMAL,
+  RECOVER,
+  UPSTAIRS,
+  PROTECT
 };
 
 // 左右腿枚举
@@ -216,7 +226,7 @@ struct DebugData
   double virtual_force = 0.0;
   double virtual_torque = 0.0;
   double lqr_error[6]{};  // 存储状态偏差量以供绘制曲线
-  RobotMode mode = RobotMode::HANGING;
+  RobotPhysicalState mode = RobotPhysicalState::HANGING;
 };
 
 // 算法更新的最终输出包

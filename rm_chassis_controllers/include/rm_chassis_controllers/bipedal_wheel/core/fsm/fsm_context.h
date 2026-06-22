@@ -7,12 +7,7 @@
 namespace bipedal_wheel_core
 {
 
-template <
-    typename PidType,
-    typename LoggerType,
-    typename RampFilterType,
-    typename MovingAverageFilterType
->
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 struct FsmContext
 {
   const ControllerParams& config;
@@ -21,7 +16,7 @@ struct FsmContext
 
   ControlOutput& control_output;
   LQRStatus& lqr_status;
-  RobotMode& current_mode;
+  RobotPhysicalState& current_physical_state;
 
   // Shared state indicators
   bool& complete_stand;
@@ -35,11 +30,12 @@ struct FsmContext
   VMC* right_vmc = nullptr;
 
   // Timing
+  // Should it be a const num? todo check it
   double dt = 0.001;
 
   // Injected helper references
   LoggerType& logger;
-  
+
   // PID and Filter parameters mapping/references
   const std::vector<PidType*>& pid_legs;
   const std::vector<PidType*>& pid_thetas;
