@@ -31,7 +31,6 @@ public:
       pos_des_ = 0.0;
       jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
       ctx.balance_state_changed = true;
-      filtered_power_ = 0.0;
       filtered_alpha_ = 1.0;
     }
 
@@ -219,22 +218,25 @@ public:
                             std::abs(T_L_unscaled * omega_L) + std::abs(T_R_unscaled * omega_R) +
                             P_const_offset;
 
-    // Filter estimated power to smooth out sensor/torque noise spikes
-    double gamma_p = 0.1;
-    filtered_power_ = (1.0 - gamma_p) * filtered_power_ + gamma_p * P_est_unscaled;
-
-    // 4. Calculate K gain scaling factor alpha based on filtered power
+    // 4. Calculate K gain scaling factor alpha based on instantaneous unscaled power
     double alpha = 1.0;
-    if (filtered_power_ > power_limit && power_limit > P_const_offset)
+    if (P_est_unscaled > power_limit)
     {
-      alpha = std::sqrt((power_limit - P_const_offset) / (filtered_power_ - P_const_offset));
+      if (power_limit > P_const_offset)
+      {
+        alpha = std::sqrt((power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
+      }
+      else
+      {
+        alpha = 0.001;
+      }
     }
-    // Clamp alpha to [0.1, 1.0]
-    if (alpha < 0.1) alpha = 0.1;
+    // Clamp alpha to [0.001, 1.0]
+    if (alpha < 0.001) alpha = 0.001;
     if (alpha > 1.0) alpha = 1.0;
 
-    // Filter alpha with dynamic coefficient (fast limit, slow recovery) to avoid limit cycle oscillations
-    double gamma_alpha = (alpha < filtered_alpha_) ? 0.5 : 0.02;
+    // Filter alpha with asymmetric coefficient: drop instantly (1.0) when limiting, recover slowly (0.02)
+    double gamma_alpha = (alpha < filtered_alpha_) ? 1.0 : 0.02;
     filtered_alpha_ = (1.0 - gamma_alpha) * filtered_alpha_ + gamma_alpha * alpha;
 
     // Apply filtered_alpha to position and velocity gains for the WHEEL_T row (index 0)
@@ -589,7 +591,6 @@ private:
   int jumpTime_ = 0;
   bool x_offset_flag_ = false, protect_flag_ = false;
   double jump_cooldown_counter_ = 0.0;
-  double filtered_power_ = 0.0;
   double filtered_alpha_ = 1.0;
 
   // Reentrant support force filter states
