@@ -157,6 +157,10 @@ struct ControllerCommands
   double leg_length_cmd = 0.12;
   bool overturn = false;
   const Eigen::Matrix<double, 4, 12>* coeffs = nullptr;
+  double power_limit = 120.0;
+  double vel_coeff = 0.0;
+  double effort_coeff = 0.0;
+  double power_offset = 0.0;
 };
 
 // 核心算法内部估计的机器人绝对状态（可通过 Getter 接口暴露供 ROS 观测）
@@ -168,6 +172,8 @@ struct LQRStatus
   double dx = 0.0;       // 绝对水平速度
   double pitch = 0.0;    // 底盘绝对俯仰角
   double d_pitch = 0.0;  // 底盘绝对俯仰角速度
+  double power = 0.0;    // 实时估计功率
+  double k_scale = 1.0;  // 当前增益缩放系数
 };
 
 // 纯粹的硬件执行器状态（输入）

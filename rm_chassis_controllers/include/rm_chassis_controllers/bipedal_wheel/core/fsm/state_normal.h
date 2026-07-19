@@ -188,8 +188,65 @@ public:
     clamp(x_left(THETA), -0.6, 0.6);
     clamp(x_right(THETA), -0.6, 0.6);
 
+    // 1. Calculate unscaled wheel torques using unscaled LQR gains and clamped errors
+    double T_L_unscaled = k_left(WHEEL_T, THETA) * (-x_left(THETA)) +
+                          k_left(WHEEL_T, D_THETA) * (-x_left(D_THETA)) +
+                          k_left(WHEEL_T, POS) * (-x_left(POS)) +
+                          k_left(WHEEL_T, VEL) * (-x_left(VEL)) +
+                          k_left(WHEEL_T, PITCH) * (-x_left(PITCH)) +
+                          k_left(WHEEL_T, D_PITCH) * (-x_left(D_PITCH));
+    double T_R_unscaled = k_right(WHEEL_T, THETA) * (-x_right(THETA)) +
+                          k_right(WHEEL_T, D_THETA) * (-x_right(D_THETA)) +
+                          k_right(WHEEL_T, POS) * (-x_right(POS)) +
+                          k_right(WHEEL_T, VEL) * (-x_right(VEL)) +
+                          k_right(WHEEL_T, PITCH) * (-x_right(PITCH)) +
+                          k_right(WHEEL_T, D_PITCH) * (-x_right(D_PITCH));
+
+    // 2. Wheel velocities
+    double omega_L = ctx.sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel;
+    double omega_R = ctx.sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel;
+
+    // 3. Power Observer estimation
+    double effort_coeff = ctx.cmd_in.effort_coeff;
+    double vel_coeff = ctx.cmd_in.vel_coeff;
+    double power_offset = ctx.cmd_in.power_offset;
+    double power_limit = ctx.cmd_in.power_limit;
+
+    double P_const_offset = vel_coeff * (std::pow(omega_L, 2) + std::pow(omega_R, 2)) - power_offset;
+    double P_est_unscaled = effort_coeff * (std::pow(T_L_unscaled, 2) + std::pow(T_R_unscaled, 2)) +
+                            std::abs(T_L_unscaled * omega_L) + std::abs(T_R_unscaled * omega_R) +
+                            P_const_offset;
+
+    // 4. Calculate K gain scaling factor alpha
+    double alpha = 1.0;
+    if (P_est_unscaled > power_limit && power_limit > P_const_offset)
+    {
+      alpha = std::sqrt((power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
+    }
+    // Clamp alpha to [0.1, 1.0]
+    if (alpha < 0.1) alpha = 0.1;
+    if (alpha > 1.0) alpha = 1.0;
+
+    // Apply alpha to position and velocity gains for the WHEEL_T row (index 0)
+    k_left(WHEEL_T, POS) *= alpha;
+    k_left(WHEEL_T, VEL) *= alpha;
+    k_right(WHEEL_T, POS) *= alpha;
+    k_right(WHEEL_T, VEL) *= alpha;
+
+    // Save outputs to status
+    ctx.lqr_status.k_scale = alpha;
+
+    // 5. Compute scaled command
     u_left = k_left * (-x_left);
     u_right = k_right * (-x_right);
+
+    // Compute actual power estimation with scaled torques
+    double T_L_scaled = u_left(WHEEL_T);
+    double T_R_scaled = u_right(WHEEL_T);
+    double P_est_scaled = effort_coeff * (std::pow(T_L_scaled, 2) + std::pow(T_R_scaled, 2)) +
+                          std::abs(T_L_scaled * omega_L) + std::abs(T_R_scaled * omega_R) +
+                          P_const_offset;
+    ctx.lqr_status.power = P_est_scaled;
 
     // Compute leg thrust forces
     double gravity = ctx.config.model_params.f_gravity;

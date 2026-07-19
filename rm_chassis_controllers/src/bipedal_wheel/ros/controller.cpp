@@ -201,6 +201,10 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   cmd_in.jump_cmd = jump_cmd_;
   cmd_in.overturn = overturn_;
   cmd_in.coeffs = &coeffs_;
+  cmd_in.power_limit = cmd_rt_buffer_.readFromRT()->cmd_chassis_.power_limit;
+  cmd_in.vel_coeff = velocity_coeff_;
+  cmd_in.effort_coeff = effort_coeff_;
+  cmd_in.power_offset = power_offset_;
 
   if (state_ == rm_msgs::ChassisCmd::RAW)
     cmd_in.base_state = 1;
