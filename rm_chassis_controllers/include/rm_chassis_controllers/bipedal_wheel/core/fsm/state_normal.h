@@ -228,11 +228,11 @@ public:
       }
       else
       {
-        alpha = 0.001;
+        alpha = 0.1;
       }
     }
-    // Clamp alpha to [0.001, 1.0]
-    if (alpha < 0.001) alpha = 0.001;
+    // Clamp alpha to [0.1, 1.0]
+    if (alpha < 0.1) alpha = 0.1;
     if (alpha > 1.0) alpha = 1.0;
 
     // Filter alpha with asymmetric coefficient: drop instantly (1.0) when limiting, recover slowly (0.02)
