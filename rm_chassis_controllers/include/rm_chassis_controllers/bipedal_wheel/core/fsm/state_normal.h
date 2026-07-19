@@ -218,13 +218,15 @@ public:
                             std::abs(T_L_unscaled * omega_L) + std::abs(T_R_unscaled * omega_R) +
                             P_const_offset;
 
-    // 4. Calculate K gain scaling factor alpha based on instantaneous unscaled power
+    // 4. Calculate K gain scaling factor alpha based on instantaneous unscaled power with a 90% safety buffer
     double alpha = 1.0;
-    if (P_est_unscaled > power_limit)
+    double safety_coeff = 0.9;
+    double safe_power_limit = safety_coeff * power_limit;
+    if (P_est_unscaled > safe_power_limit)
     {
-      if (power_limit > P_const_offset)
+      if (safe_power_limit > P_const_offset)
       {
-        alpha = std::sqrt((power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
+        alpha = std::sqrt((safe_power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
       }
       else
       {
