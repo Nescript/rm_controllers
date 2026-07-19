@@ -31,6 +31,12 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     return false;
   }
 
+  lqr_reconfig_srv_ = new dynamic_reconfigure::Server<rm_chassis_controllers::LQRWeightConfig>(
+      ros::NodeHandle(controller_nh, "lqr"));
+  dynamic_reconfigure::Server<rm_chassis_controllers::LQRWeightConfig>::CallbackType cb =
+      boost::bind(&BipedalController::lqrReconfigCB, this, _1, _2);
+  lqr_reconfig_srv_->setCallback(cb);
+
   // Cache static TF at init time if available
   try
   {
@@ -626,6 +632,48 @@ geometry_msgs::Twist BipedalController::odometry()
     twist.angular.z = 0.0;
   }
   return twist;
+}
+
+void BipedalController::lqrReconfigCB(rm_chassis_controllers::LQRWeightConfig& config, uint32_t /*level*/)
+{
+  ROS_INFO("[LQR] Dynamic params change callback triggered");
+  if (!lqr_reconfig_initialized_)
+  {
+    config.Q_theta = q_(0, 0);
+    config.Q_d_theta = q_(1, 1);
+    config.Q_x = q_(2, 2);
+    config.Q_dx = q_(3, 3);
+    config.Q_phi = q_(4, 4);
+    config.Q_d_phi = q_(5, 5);
+    config.R_T = r_(0, 0);
+    config.R_Tp = r_(1, 1);
+    lqr_reconfig_initialized_ = true;
+    return;
+  }
+
+  q_.diagonal() << config.Q_theta, config.Q_d_theta, config.Q_x, config.Q_dx, config.Q_phi, config.Q_d_phi;
+  r_.diagonal() << config.R_T, config.R_Tp;
+
+  std::vector<double> lengths;
+  std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>> ks;
+  for (int i = 10; i < 40; i++)
+  {
+    double length = i / 100.0f;
+    lengths.push_back(length);
+    Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> a{};
+    Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::CONTROL_DIM> b{};
+    generateAB(*model_params_, a, b, length);
+    Lqr<double> lqr(a, b, q_, r_);
+    if (!lqr.computeK())
+    {
+      ROS_ERROR("Failed to compute K of LQR in dynamic reconfigure callback.");
+      return;
+    }
+    Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM> k = lqr.getK();
+    ks.push_back(k);
+  }
+  polyfit(ks, lengths, coeffs_);
+  ROS_INFO("[LQR] Weights reconfigured and coefficients updated successfully.");
 }
 
 }  // namespace rm_chassis_controllers

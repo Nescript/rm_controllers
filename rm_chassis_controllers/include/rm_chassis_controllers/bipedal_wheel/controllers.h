@@ -17,6 +17,8 @@
 
 #include <geometry_msgs/Vector3.h>
 #include <realtime_tools/realtime_publisher.h>
+#include <rm_chassis_controllers/LQRWeightConfig.h>
+#include <dynamic_reconfigure/server.h>
 
 namespace rm_chassis_controllers
 {
@@ -26,8 +28,7 @@ class RosPidWrapper
 public:
   RosPidWrapper() = default;
   explicit RosPidWrapper(control_toolbox::Pid* pid) : pid_(pid)
-  {
-  }
+  {}
 
   double computeCommand(double error, double dt)
   {
@@ -89,6 +90,8 @@ public:
 
   bool initCoreAlgorithm(ros::NodeHandle& controller_nh);
 
+  void lqrReconfigCB(rm_chassis_controllers::LQRWeightConfig& config, uint32_t level);
+
   // setup Methods which use while initParams
   bool setupLQR(ros::NodeHandle& controller_nh);
   bool setupModelParams(ros::NodeHandle& controller_nh);
@@ -127,6 +130,8 @@ public:
   Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> q_;
   Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::CONTROL_DIM> r_;
   Eigen::Matrix<double, 4, 12> coeffs_ = Eigen::Matrix<double, 4, 12>::Zero();
+  dynamic_reconfigure::Server<rm_chassis_controllers::LQRWeightConfig>* lqr_reconfig_srv_ = nullptr;
+  bool lqr_reconfig_initialized_ = false;
 
   // Control modes
   int balance_mode_ = 0;
