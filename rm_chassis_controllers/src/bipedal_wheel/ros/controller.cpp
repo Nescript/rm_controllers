@@ -26,7 +26,7 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     return false;
   }
 
-  if (!initCoreAlgorithm())
+  if (!initCoreAlgorithm(controller_nh))
   {
     return false;
   }
@@ -539,7 +539,7 @@ bool BipedalController::setupSpringParams(ros::NodeHandle& controller_nh)
   return true;
 }
 
-bool BipedalController::initCoreAlgorithm()
+bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
 {
   // 1. Initialize wrappers
   pid_wrapper_yaw_vel_.setPid(&pid_yaw_vel_);
@@ -586,6 +586,7 @@ bool BipedalController::initCoreAlgorithm()
   params.default_leg_length = default_leg_length_;
 
   // 4. Initialize core algorithm
+  logger_.init(controller_nh);
   if (!core_.init(params, logger_, pid_wrappers_legs_, pid_wrappers_legs_stand_up_, pid_wrappers_thetas_,
                   pid_wrappers_wheels_, &pid_wrapper_yaw_vel_, &pid_wrapper_theta_diff_, &pid_wrapper_roll_,
                   &pid_wrapper_wheel_vel_diff_))

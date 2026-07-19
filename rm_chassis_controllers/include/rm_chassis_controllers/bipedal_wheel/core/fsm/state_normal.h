@@ -247,6 +247,7 @@ public:
                           std::abs(T_L_scaled * omega_L) + std::abs(T_R_scaled * omega_R) +
                           P_const_offset;
     ctx.lqr_status.power = P_est_scaled;
+    ctx.logger.publishPower(ctx.lqr_status.power, power_limit, alpha);
 
     // Compute leg thrust forces
     double gravity = ctx.config.model_params.f_gravity;

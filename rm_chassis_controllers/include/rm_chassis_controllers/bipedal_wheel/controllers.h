@@ -15,6 +15,9 @@
 #include "bipedal_wheel/core/bipedal_wheel_core.h"
 #include "ros/node_handle.h"
 
+#include <geometry_msgs/Vector3.h>
+#include <realtime_tools/realtime_publisher.h>
+
 namespace rm_chassis_controllers
 {
 
@@ -43,12 +46,28 @@ private:
 class RosLoggerWrapper
 {
 public:
+  void init(ros::NodeHandle& nh)
+  {
+    power_pub_ = std::make_shared<realtime_tools::RealtimePublisher<geometry_msgs::Vector3>>(nh, "power_debug", 1);
+  }
   void info(const std::string& msg)
   { ROS_INFO_STREAM(msg); }
   void warn(const std::string& msg)
   { ROS_WARN_STREAM(msg); }
   void error(const std::string& msg)
   { ROS_ERROR_STREAM(msg); }
+  void publishPower(double power, double power_limit, double k_scale = 1.0)
+  {
+    if (power_pub_ && power_pub_->trylock())
+    {
+      power_pub_->msg_.x = power;
+      power_pub_->msg_.y = power_limit;
+      power_pub_->msg_.z = k_scale;
+      power_pub_->unlockAndPublish();
+    }
+  }
+private:
+  std::shared_ptr<realtime_tools::RealtimePublisher<geometry_msgs::Vector3>> power_pub_;
 };
 
 class BipedalController : public ChassisBase<rm_control::RobotStateInterface, hardware_interface::ImuSensorInterface,
@@ -68,7 +87,7 @@ public:
 
   bool initHardwareHandles(hardware_interface::RobotHW* robot_hw);
 
-  bool initCoreAlgorithm();
+  bool initCoreAlgorithm(ros::NodeHandle& controller_nh);
 
   // setup Methods which use while initParams
   bool setupLQR(ros::NodeHandle& controller_nh);
