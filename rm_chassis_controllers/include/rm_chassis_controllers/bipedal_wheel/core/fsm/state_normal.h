@@ -31,6 +31,8 @@ public:
       pos_des_ = 0.0;
       jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
       ctx.balance_state_changed = true;
+      filtered_power_ = 0.0;
+      filtered_alpha_ = 1.0;
     }
 
     const auto& chassis_state = ctx.sens_in.chassis_state;
@@ -217,24 +219,32 @@ public:
                             std::abs(T_L_unscaled * omega_L) + std::abs(T_R_unscaled * omega_R) +
                             P_const_offset;
 
-    // 4. Calculate K gain scaling factor alpha
+    // Filter estimated power to smooth out sensor/torque noise spikes
+    double gamma_p = 0.1;
+    filtered_power_ = (1.0 - gamma_p) * filtered_power_ + gamma_p * P_est_unscaled;
+
+    // 4. Calculate K gain scaling factor alpha based on filtered power
     double alpha = 1.0;
-    if (P_est_unscaled > power_limit && power_limit > P_const_offset)
+    if (filtered_power_ > power_limit && power_limit > P_const_offset)
     {
-      alpha = std::sqrt((power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
+      alpha = std::sqrt((power_limit - P_const_offset) / (filtered_power_ - P_const_offset));
     }
     // Clamp alpha to [0.1, 1.0]
     if (alpha < 0.1) alpha = 0.1;
     if (alpha > 1.0) alpha = 1.0;
 
-    // Apply alpha to position and velocity gains for the WHEEL_T row (index 0)
-    k_left(WHEEL_T, POS) *= alpha;
-    k_left(WHEEL_T, VEL) *= alpha;
-    k_right(WHEEL_T, POS) *= alpha;
-    k_right(WHEEL_T, VEL) *= alpha;
+    // Filter alpha with dynamic coefficient (fast limit, slow recovery) to avoid limit cycle oscillations
+    double gamma_alpha = (alpha < filtered_alpha_) ? 0.5 : 0.02;
+    filtered_alpha_ = (1.0 - gamma_alpha) * filtered_alpha_ + gamma_alpha * alpha;
+
+    // Apply filtered_alpha to position and velocity gains for the WHEEL_T row (index 0)
+    k_left(WHEEL_T, POS) *= filtered_alpha_;
+    k_left(WHEEL_T, VEL) *= filtered_alpha_;
+    k_right(WHEEL_T, POS) *= filtered_alpha_;
+    k_right(WHEEL_T, VEL) *= filtered_alpha_;
 
     // Save outputs to status
-    ctx.lqr_status.k_scale = alpha;
+    ctx.lqr_status.k_scale = filtered_alpha_;
 
     // 5. Compute scaled command
     u_left = k_left * (-x_left);
@@ -247,7 +257,7 @@ public:
                           std::abs(T_L_scaled * omega_L) + std::abs(T_R_scaled * omega_R) +
                           P_const_offset;
     ctx.lqr_status.power = P_est_scaled;
-    ctx.logger.publishPower(ctx.lqr_status.power, power_limit, alpha);
+    ctx.logger.publishPower(ctx.lqr_status.power, power_limit, filtered_alpha_);
 
     // Compute leg thrust forces
     double gravity = ctx.config.model_params.f_gravity;
@@ -579,6 +589,8 @@ private:
   int jumpTime_ = 0;
   bool x_offset_flag_ = false, protect_flag_ = false;
   double jump_cooldown_counter_ = 0.0;
+  double filtered_power_ = 0.0;
+  double filtered_alpha_ = 1.0;
 
   // Reentrant support force filter states
   double last_ddot_zM_l_ = 0.0, last_dot_theta_l_ = 0.0, last_ddot_theta_l_ = 0.0, last_ddot_leg_len_l_ = 0.0;
