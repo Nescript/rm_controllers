@@ -52,3 +52,15 @@ CATKIN_IGNORE
 
 # Doxygen
 docs/
+
+# Local AI agent files
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+COPILOT.md
+CURSOR.md
+.cursorrules
+.cursorignore
+.agents/
+*.agent.md
+.github/copilot-instructions.md
