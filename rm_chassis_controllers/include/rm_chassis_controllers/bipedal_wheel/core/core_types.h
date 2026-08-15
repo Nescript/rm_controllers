@@ -11,7 +11,7 @@ namespace bipedal_wheel_core
 // 机器人状态机枚举
 enum class RobotPhysicalState
 {
-  HANGING = 0,  // 挂起/悬空状态
+  UNSTABLE_PROTECT = 0,  // 失稳/过载保护状态
   FALLEN,       // 倾覆/倒地状态
   GETTING_UP,   // 试图起立中
   STAND         // 平衡站立控制状态
@@ -89,7 +89,10 @@ struct LqrModelParams
   double f_gravity = 0.0;  // Gravity Force
   double l1 = 0.0;         // Thigh link length (m)
   double l2 = 0.0;         // Calf link length (m)
+  double l3 = 0.0;         // Five-bar connecting rod length (m, drive tip -> wheel axle)
+  double l4 = 0.0;         // Five-bar drive link length (m)
   double l5 = 0.0;         // Distance offset / virtual offset (m)
+  bool five_link = false;  // true: standard five-bar, both leg motors at the base
 };
 
 struct ChassisGeometryParams
@@ -232,7 +235,7 @@ struct DebugData
   double virtual_force = 0.0;
   double virtual_torque = 0.0;
   double lqr_error[6]{};  // 存储状态偏差量以供绘制曲线
-  RobotPhysicalState mode = RobotPhysicalState::HANGING;
+  RobotPhysicalState mode = RobotPhysicalState::UNSTABLE_PROTECT;
 };
 
 // 算法更新的最终输出包

@@ -417,9 +417,12 @@ public:
     // Output LQR estimation data for packaging
     ctx.lqr_status.theta = (left_pos.theta + right_pos.theta) / 2.0;
     ctx.lqr_status.d_theta = (left_spd.dTheta + right_spd.dTheta) / 2.0;
-    // (Actual visualization telemetry is published by ROS wrapper)
 
+    bool unstick[2] = { left_unstick, right_unstick };
+    Eigen::Vector2d F_leg_vec(F_leg[LEFT], F_leg[RIGHT]);
     bool unstick_flag = left_unstick && right_unstick;
+    ctx.logger.publishLqrStatus(-x_left, -x_right, x_left_ref, x_right_ref, u_left, u_right, F_leg_vec, unstick);
+    ctx.logger.publishUnstick(unstick_flag);
     if ((ctx.complete_stand && unstick_flag && jump_phase_ != JumpPhase::LEG_RETRACTION) ||
         jump_phase_ == JumpPhase::OFF_GROUND)
     {
@@ -469,7 +472,7 @@ public:
       {
         protect_flag_ = true;
         leg_length_des = ctx.config.default_leg_length;
-        ctx.current_physical_state = RobotPhysicalState::HANGING;  // HANGING maps to Protect
+        ctx.current_physical_state = RobotPhysicalState::UNSTABLE_PROTECT;  // UNSTABLE_PROTECT maps to Protect
         ctx.balance_state_changed = false;
         ctx.complete_stand = false;
         ctx.logger.info("[balance] Exit NORMAL");

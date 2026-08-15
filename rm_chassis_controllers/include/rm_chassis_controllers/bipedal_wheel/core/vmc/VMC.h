@@ -29,6 +29,8 @@ class VMC
 {
 public:
   explicit VMC(double l1, double l2, double l5 = 0) : l1_(l1), l2_(l2), l3_(l2), l4_(l1), l5_(l5) {};
+  explicit VMC(double l1, double l2, double l3, double l4, double l5, bool five_link)
+      : l1_(l1), l2_(l2), l3_(l3), l4_(l4), l5_(l5), five_link_(five_link) {};
   ~VMC() = default;
 
   /**
@@ -127,6 +129,7 @@ private:
   LegForce force_real_;
 
   double l1_, l2_, l3_, l4_, l5_;
+  bool five_link_ = false;  // true: standard five-bar (both motors at base), false: serial 2-link
 };
 using VMCPtr = std::shared_ptr<VMC>;
 }  // namespace bipedal_wheel_core

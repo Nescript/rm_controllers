@@ -73,7 +73,7 @@ public:
 private:
   bipedal_wheel_core::ControllerParams config_;
   bipedal_wheel_core::LQRStatus lqr_status_;
-  bipedal_wheel_core::RobotPhysicalState robot_mode_ = bipedal_wheel_core::RobotPhysicalState::HANGING;
+  bipedal_wheel_core::RobotPhysicalState robot_mode_ = bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT;
 
   std::unique_ptr<VMC> left_vmc_;
   std::unique_ptr<VMC> right_vmc_;

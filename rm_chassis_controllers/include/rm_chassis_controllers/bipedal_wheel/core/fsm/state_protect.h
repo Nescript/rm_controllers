@@ -37,7 +37,7 @@ public:
     left_wheel_desired_vel = ctx.cmd_in.vel_cmd.x() - ctx.cmd_in.vel_cmd.z() * ctx.config.chassis_geometry.wheel_track;
     right_wheel_desired_vel = ctx.cmd_in.vel_cmd.x() + ctx.cmd_in.vel_cmd.z() * ctx.config.chassis_geometry.wheel_track;
 
-    length_des_l = length_des_r = 0.11;
+    length_des_l = length_des_r = ctx.config.default_leg_length;  // was hardcoded 0.11 (below this robot's min L0 ~0.18)
     theta_des_l = theta_des_r = 0.0;
 
     ramp_length_des_l_->input(length_des_l);
@@ -109,7 +109,7 @@ public:
   }
 
 private:
-  double theta_des_l = 0.0, theta_des_r = 0.0, length_des_l = 0.11, length_des_r = 0.11;
+  double theta_des_l = 0.0, theta_des_r = 0.0, length_des_l = 0.12, length_des_r = 0.12;
   std::shared_ptr<RampFilterType> ramp_length_des_l_;
   std::shared_ptr<RampFilterType> ramp_length_des_r_;
   std::shared_ptr<RampFilterType> ramp_angle_des_l_;

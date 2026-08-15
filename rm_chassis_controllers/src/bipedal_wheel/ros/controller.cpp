@@ -174,11 +174,12 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   }
 
   // 2. 打包左腿关节状态 (hip, knee, wheel)
-  sens_in.leg_state[bipedal_wheel_core::LEFT].hip.position = left_hip_joint_handle_.getPosition() + M_PI_2;
+  sens_in.leg_state[bipedal_wheel_core::LEFT].hip.position =
+      left_hip_joint_handle_.getPosition() + hip_offset_;
   sens_in.leg_state[bipedal_wheel_core::LEFT].hip.vel = left_hip_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::LEFT].hip.effort = left_hip_joint_handle_.getEffort();
 
-  sens_in.leg_state[bipedal_wheel_core::LEFT].knee.position = left_knee_joint_handle_.getPosition() - M_PI_2;
+  sens_in.leg_state[bipedal_wheel_core::LEFT].knee.position = left_knee_joint_handle_.getPosition() + knee_offset_;
   sens_in.leg_state[bipedal_wheel_core::LEFT].knee.vel = left_knee_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::LEFT].knee.effort = left_knee_joint_handle_.getEffort();
 
@@ -187,11 +188,12 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.effort = left_wheel_joint_handle_.getEffort();
 
   // 3. 打包右腿关节状态 (hip, knee, wheel)
-  sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.position = right_hip_joint_handle_.getPosition() + M_PI_2;
+  sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.position =
+      right_hip_joint_handle_.getPosition() + hip_offset_;
   sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.vel = right_hip_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.effort = right_hip_joint_handle_.getEffort();
 
-  sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.position = right_knee_joint_handle_.getPosition() - M_PI_2;
+  sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.position = right_knee_joint_handle_.getPosition() + knee_offset_;
   sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.vel = right_knee_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.effort = right_knee_joint_handle_.getEffort();
 
@@ -240,11 +242,69 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
 
   // 8. 将输出控制量应用给电机
   setJointCommands(joint_handles_, ctrl_out);
+
+  // 9. 发布常规遥测数据
+  const auto* left_vmc = core_.getLeftVmc();
+  const auto* right_vmc = core_.getRightVmc();
+  if (left_vmc && right_vmc)
+  {
+    double left_leg_theta = left_vmc->getPos().theta + pitch;
+    double left_leg_theta_dot = left_vmc->getSpd().dTheta + angular_vel_base.y;
+    double right_leg_theta = right_vmc->getPos().theta + pitch;
+    double right_leg_theta_dot = right_vmc->getSpd().dTheta + angular_vel_base.y;
+
+    logger_.publishChassisStatus(
+        roll, pitch, -angular_vel_base.y, yaw, angular_vel_base.z,
+        left_vmc->getPos().L0, right_vmc->getPos().L0,
+        core_.getLqrStatus().x, core_.getLqrStatus().dx,
+        left_leg_theta, left_leg_theta_dot,
+        right_leg_theta, right_leg_theta_dot,
+        linear_acc_base
+    );
+  }
+
+  int mode = 0;
+  std::string mode_name = "UNKNOWN";
+  switch (core_.getFsmState())
+  {
+    case bipedal_wheel_core::FsmState::NORMAL:
+      mode = 0;
+      mode_name = "NORMAL";
+      break;
+    case bipedal_wheel_core::FsmState::STAND_UP:
+      mode = 1;
+      mode_name = "STAND_UP";
+      break;
+    case bipedal_wheel_core::FsmState::SIT_DOWN:
+      mode = 2;
+      mode_name = "SIT_DOWN";
+      break;
+    case bipedal_wheel_core::FsmState::RECOVER:
+      mode = 3;
+      mode_name = "RECOVER";
+      break;
+    case bipedal_wheel_core::FsmState::UPSTAIRS:
+      mode = 4;
+      mode_name = "UPSTAIRS";
+      break;
+    case bipedal_wheel_core::FsmState::PROTECT:
+      mode = 5;
+      mode_name = "PROTECT";
+      break;
+  }
+  logger_.publishChassisMode(mode, mode_name);
+
+  // Throttled console print of the balance state, readable amid other log spam
+  static const char* physical_names[] = { "UNSTABLE_PROTECT", "FALLEN", "GETTING_UP", "STAND" };
+  int physical_idx = static_cast<int>(core_.getRobotMode());
+  const char* physical_name = (physical_idx >= 0 && physical_idx < 4) ? physical_names[physical_idx] : "UNKNOWN";
+  ROS_INFO_THROTTLE(1.0, "[balance] FSM: %s | physical: %s | pitch: %.3f | roll: %.3f | overturn: %d",
+                    mode_name.c_str(), physical_name, pitch, roll, static_cast<int>(overturn_));
 }
 
 void BipedalController::stopping(const ros::Time& time)
 {
-  core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::HANGING);
+  core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT);
   balance_state_changed_ = false;
   bipedal_wheel_core::ControlOutput zero_cmd{};
   setJointCommands(joint_handles_, zero_cmd);
@@ -398,12 +458,23 @@ bool BipedalController::setupModelParams(ros::NodeHandle& controller_nh)
     return false;
   }
   controller_nh.param("l5", model_params_->l5, 0.0);
+  controller_nh.param("l3", model_params_->l3, 0.18);
+  controller_nh.param("l4", model_params_->l4, 0.08);
+  controller_nh.param("five_link", model_params_->five_link, false);
+  five_link_ = model_params_->five_link;
+  controller_nh.param("knee_offset", knee_offset_, -M_PI_2);
+  controller_nh.param("hip_offset", hip_offset_, -1000.0);
+  if (hip_offset_ < -100.0)
+    hip_offset_ = five_link_ ? M_PI : M_PI_2;
 
   if (!controller_nh.getParam("default_leg_length", default_leg_length_))
   {
     ROS_ERROR("Param %s not given (namespace: %s)", "default_leg_length", controller_nh.getNamespace().c_str());
     return false;
   }
+  // Start with a reachable L0 target; the hardcoded 0.12 is below this robot's minimum
+  // and folds the linkage into its rocker dead zone before the first /leg_cmd arrives.
+  leg_length_cmd_ = default_leg_length_;
 
   return true;
 }
@@ -621,7 +692,7 @@ void BipedalController::polyfit(
 geometry_msgs::Twist BipedalController::odometry()
 {
   geometry_msgs::Twist twist;
-  if (core_.getRobotMode() != bipedal_wheel_core::RobotPhysicalState::HANGING)
+  if (core_.getRobotMode() != bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT)
   {
     twist.linear.x = core_.getLqrStatus().dx;
     twist.angular.z = last_yaw_vel_;

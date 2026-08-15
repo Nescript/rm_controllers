@@ -26,8 +26,8 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   }
 
   // Construct left and right VMC solvers
-  left_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l5);
-  right_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l5);
+  left_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
+  right_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
 
   config_ = config;
   logger_ = &logger;
@@ -65,7 +65,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
     {
       FSM_variant_ = SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
     }
-    else if (robot_mode_ == RobotPhysicalState::HANGING)
+    else if (robot_mode_ == RobotPhysicalState::UNSTABLE_PROTECT)
     {
       FSM_variant_ = Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
     }
@@ -147,7 +147,7 @@ template <typename PidType, typename LoggerType, typename RampFilterType, typena
 void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::reset()
 {
   lqr_status_ = bipedal_wheel_core::LQRStatus{};
-  robot_mode_ = bipedal_wheel_core::RobotPhysicalState::HANGING;
+  robot_mode_ = bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT;
   complete_stand_ = false;
   overturn_ = false;
   move_flag_ = false;
@@ -159,11 +159,13 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
 
   if (left_vmc_)
   {
-    *left_vmc_ = VMC(config_.model_params.l1, config_.model_params.l2, config_.model_params.l5);
+    *left_vmc_ = VMC(config_.model_params.l1, config_.model_params.l2, config_.model_params.l3,
+                     config_.model_params.l4, config_.model_params.l5, config_.model_params.five_link);
   }
   if (right_vmc_)
   {
-    *right_vmc_ = VMC(config_.model_params.l1, config_.model_params.l2, config_.model_params.l5);
+    *right_vmc_ = VMC(config_.model_params.l1, config_.model_params.l2, config_.model_params.l3,
+                      config_.model_params.l4, config_.model_params.l5, config_.model_params.five_link);
   }
 }
 
@@ -239,11 +241,16 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   slip_flag_ = std::abs(x_hat(0) - wheel_vel_aver) > 3.0;
 
   // 5. Update estimated state
+  // Hysteresis: latch when badly tipped, release once the chassis is back near level.
+  // series_leg_tester note: this robot's unpowered five-bar rests either in the folded
+  // "triangle" pose (pitch ~0.44) or flat (pitch ~0), and the tip-recover cycle passes
+  // pitch ~0.55 on the way down. The original 0.2 release kept overturn_ latched
+  // forever, so GETTING_UP always took Recover and the FSM could never reach StandUp.
   if (std::abs(sens_in.chassis_state.pitch) > 0.6 || std::abs(sens_in.chassis_state.roll) > 0.8)
   {
     overturn_ = true;
   }
-  else if (std::abs(sens_in.chassis_state.pitch) < 0.2 && std::abs(sens_in.chassis_state.roll) < 0.2)
+  else if (std::abs(sens_in.chassis_state.pitch) < 0.55 && std::abs(sens_in.chassis_state.roll) < 0.55)
   {
     overturn_ = false;
   }

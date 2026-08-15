@@ -101,7 +101,7 @@ public:
     {
       ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
       ctx.balance_state_changed = false;
-      ctx.logger.info("[balance] Exit STAND_UP");
+      ctx.logger.info("[balance] Exit STAND_UP (overturn)");
     }
   }
 
