@@ -50,10 +50,13 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
     legCmd_ = msg->leg_length;
     jumpCmd_ = msg->jump;
   };
+  auto recoveryLegSpdTurnbackCb = [this](const std_msgs::Bool::ConstPtr& msg) { setRecoveryLegSpdTurnback(msg->data); };
   leg_cmd_sub_ = controller_nh.subscribe<rm_msgs::LegCmd>("/leg_cmd", 5, legCmdCallback);
-
+  recovery_leg_spd_turnback_sub_ =
+      controller_nh.subscribe<std_msgs::Bool>("/recovery_leg_spd_turnback", 1, recoveryLegSpdTurnbackCb);
   unstick_pub_ = controller_nh.advertise<std_msgs::Bool>("unstick", 1);
   upstair_status_pub_ = controller_nh.advertise<rm_msgs::LeggedUpstairStatus>("upstair_status", 1);
+
   legged_chassis_status_pub_.reset(
       (new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>(controller_nh, "legged_chassis_status", 1)));
   legged_chassis_mode_pub_.reset(
@@ -78,7 +81,32 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   kalmanFilterPtr_ = std::make_shared<KalmanFilter<double>>(A_, B_, H_, Q_, R_);
   kalmanFilterPtr_->clear(X_);
 
+  down_5cm_stair_srv_ =
+      controller_nh.advertiseService("/down_5cm_stair", &BipedalController::down5cmStairSrvCallback, this);
+
+  // Power model online identification
+  double power_lambda = 0.999, power_alpha_ridge = 0.001;
+  controller_nh.param("power_model/lambda", power_lambda, power_lambda);
+  controller_nh.param("power_model/alpha_ridge", power_alpha_ridge, power_alpha_ridge);
+  power_model_.init(power_lambda, power_alpha_ridge);
+  Eigen::Matrix<double, 12, 1> init_c;
+  init_c.setZero();
+  power_coeffs_rt_buffer_.initRT(init_c);
+  power_status_sub_ = root_nh.subscribe<rm_msgs::PowerManagementSampleAndStatusData>(
+      "/rm_referee/power_management/sample_and_status", 10, &BipedalController::onPowerMeas, this);
+  power_model_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(
+      root_nh, "/power_model/c", 1));
+
   debugPub_ = std::make_shared<DebugDataPublisher>(controller_nh, "debug_data");
+  return true;
+}
+
+bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
+{
+  (void)req;
+  triggerDown5cmStairAction();
+  res.message = "down_5cm_stair flag set";
+  res.success = true;
   return true;
 }
 
@@ -98,6 +126,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     mode_manager_->switchMode(RECOVER);
   }
   updateEstimation(time, period);
+  updatePowerModel(time, period);
   mode_manager_->getModeImpl()->execute(time, period);
   pubState();
 }
@@ -205,7 +234,6 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   if (itor >= sample_times_)
   {  // oversampling
     static double last_linear_acc_base_x = linear_acc_base.x;
-    ;
     itor = 0;
     X_(0) = wheel_vel_aver;
     X_(1) = 0.2 * last_linear_acc_base_x + 0.8 * linear_acc_base.x;
@@ -278,6 +306,86 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   debugPub_->add("right_F_real", right_F_real.F);
   debugPub_->add("wheel_vel_aver", wheel_vel_aver);
   debugPub_->publish();
+}
+
+void BipedalController::updatePowerModel(const ros::Time& time, const ros::Duration& period)
+{
+  const double dt = period.toSec();
+  const double v = chassis_state_.x_vel;
+  const double omega = chassis_state_.angular_vel.z;
+  // a 直接用 IMU base 系加速度，比速度差分噪声低一个量级
+  const double a = chassis_state_.linear_acc.x;
+  // alpha 没有直读来源，对角速度差分
+  const double alpha = dt > 0.0 && !last_power_update_time_.isZero() ? (omega - last_yaw_rate_) / dt : 0.0;
+
+  last_yaw_rate_ = omega;
+  last_power_update_time_ = time;
+
+  // 仅在实时线程中将运动状态写入环形缓冲，剥离矩阵求解与跨线程竞争
+  PowerSample s;
+  s.stamp = time;
+  s.v = v;
+  s.omega = omega;
+  s.a = a;
+  s.alpha = alpha;
+  const int head = power_buffer_head_.load(std::memory_order_relaxed);
+  power_buffer_[head] = s;
+  power_buffer_head_.store((head + 1) % POWER_BUFFER_SIZE, std::memory_order_release);
+}
+
+void BipedalController::onPowerMeas(const rm_msgs::PowerManagementSampleAndStatusData::ConstPtr& msg)
+{
+  chassis_power_meas_.store(msg->chassis_power, std::memory_order_relaxed);
+  chassis_power_stamp_.store(msg->stamp.toSec(), std::memory_order_relaxed);
+
+  // 在环形缓冲中找与功率时间戳最近的状态样本，对齐后喂给辨识器
+  const int head = power_buffer_head_.load(std::memory_order_acquire);
+  double best_dt = std::numeric_limits<double>::max();
+  PowerSample best_sample;
+  bool found = false;
+
+  for (int i = 0; i < POWER_BUFFER_SIZE; ++i)
+  {
+    const PowerSample& s = power_buffer_[(head - 1 - i + POWER_BUFFER_SIZE) % POWER_BUFFER_SIZE];
+    if (s.stamp.isZero())
+      break;  // 尚未写满
+    const double d = std::abs((s.stamp - msg->stamp).toSec());
+    if (d < best_dt)
+    {
+      best_dt = d;
+      best_sample = s;  // 值拷贝，杜绝裸指针在后续计算期间被 RT 线程覆写
+      found = true;
+    }
+    else
+      break;  // 时间戳单调，越往前差越大
+  }
+
+  // 对齐误差在 50ms 以内认为有效
+  if (found && best_dt < 0.05)
+  {
+    // 持续激励（PE）判定：在静止死区内不更新递归统计量，防止协方差风暴（Covariance Windup）
+    if (power_model_.isExcited(best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha))
+    {
+      power_model_.updateD(0, best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha, msg->chassis_power);
+
+      // 在非实时回调线程中执行正规方程求解与物理合理性校验
+      if (power_model_.solve())
+      {
+        const auto& c = power_model_.getC();
+        power_coeffs_rt_buffer_.writeFromNonRT(c);
+
+        if (power_model_pub_->trylock())
+        {
+          power_model_pub_->msg_.data.assign(c.data(), c.data() + 12);
+          power_model_pub_->unlockAndPublish();
+        }
+      }
+      else
+      {
+        ROS_WARN_THROTTLE(2.0, "[PowerID] 求解失败或系数未通过物理合理性校验，保留上一稳定解");
+      }
+    }
+  }
 }
 
 void BipedalController::pubState()
@@ -446,11 +554,19 @@ bool BipedalController::setupBiasParams(ros::NodeHandle& controller_nh)
 // [will unused]
 bool BipedalController::setupControlParams(ros::NodeHandle& controller_nh)
 {
-  if (!controller_nh.getParam("jumpOverTime", control_params_->jumpOverTime_))
-  {
-    ROS_ERROR("Load param fail, check the resist of jump_over_time, p1, p2, p3, p4");
-    return false;
-  }
+  const std::pair<const char*, double*> tbl[] = {
+    { "jumpOverTime", &control_params_->jumpOverTime_ },
+    { "down5cmStairPitchThreshold", &control_params_->down5cmStairPitchThreshold },
+    { "down5cmStairThetaThreshold", &control_params_->down5cmStairThetaThreshold },
+    { "jump_up_force", &control_params_->jump_up_force },
+    { "off_ground_force", &control_params_->off_ground_force }
+  };
+  for (const auto& e : tbl)
+    if (!controller_nh.getParam(e.first, *e.second))
+    {
+      ROS_ERROR("Param %s not given (namespace: %s)", e.first, controller_nh.getNamespace().c_str());
+      return false;
+    }
   return true;
 }
 
@@ -468,6 +584,7 @@ bool BipedalController::setupThresholdParams(ros::NodeHandle& controller_nh)
     { "upstair_des_theta", &leg_threshold_params_->upstair_des_theta },
     { "upstair_des_length", &leg_threshold_params_->upstair_des_length },
     { "unstick_threshold", &leg_threshold_params_->unstick_threshold },
+    { "arrive_time_threshold", &leg_threshold_params_->arrive_time_threshold }
   };
   for (const auto& e : tbl)
     if (!controller_nh.getParam(e.first, *e.second))
@@ -584,6 +701,9 @@ void BipedalController::reconfigCB(rm_chassis_controllers::LQRWeightConfig& conf
     config.Q_d_phi = init_config.Q_d_phi;
     config.R_T = init_config.R_T;
     config.R_Tp = init_config.R_Tp;
+    config.x_bias = bias_params_->x;
+    config.theta_bias = bias_params_->theta;
+    config.raw_theta_bias = bias_params_->raw_theta;
     dynamic_reconfig_initialized_ = true;
   }
   LQRConfig config_non_rt{ .Q_theta = config.Q_theta,
@@ -630,21 +750,25 @@ void BipedalController::reconfigCB(rm_chassis_controllers::LQRWeightConfig& conf
     }
   }
   std::cout << "len: 0.2m LQR k: " << std::endl << k << std::endl;
+
+  bias_params_->x = config.x_bias;
+  bias_params_->theta = config.theta_bias;
+  bias_params_->raw_theta = config.raw_theta_bias;
 }
 
 double BipedalController::f_spring_force(double L0)
 {
-  static double l1 = leg_state_[LEFT].vmc->getL1(), l2 = leg_state_[LEFT].vmc->getL2();
-  static double Fs = spring_params_->f_spring, s2 = spring_params_->s2, s3 = spring_params_->s3,
-                alpha_s = spring_params_->alpha_s;
-  double cos_theta3, theta3, ls, Fv;
-  cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
-  theta3 = acos(cos_theta3);
-  ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
-  Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
-  return Fv;
+  //  static double l1 = leg_state_[LEFT].vmc->getL1(), l2 = leg_state_[LEFT].vmc->getL2();
+  //  static double Fs = spring_params_->f_spring, s2 = spring_params_->s2, s3 = spring_params_->s3,
+  //                alpha_s = spring_params_->alpha_s;
+  //  double cos_theta3, theta3, ls, Fv;
+  //  cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
+  //  theta3 = acos(cos_theta3);
+  //  ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
+  //  Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
+  //  return Fv;
 
-  //  return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
+  return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
 }
 
 }  // namespace rm_chassis_controllers

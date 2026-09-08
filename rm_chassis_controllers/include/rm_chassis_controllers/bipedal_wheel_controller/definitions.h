@@ -6,6 +6,7 @@
 
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include <array>
+#include <cstdint>
 #include <utility>
 
 namespace rm_chassis_controllers
@@ -46,16 +47,18 @@ struct SpringParams
 struct ControlParams
 {
   double jumpOverTime_;
-  double p1_;
-  double p2_;
-  double p3_;
-  double p4_;
+  double down5cmStairPitchThreshold;
+  double down5cmStairThetaThreshold;
+  double jump_up_force;
+  double off_ground_force;
 };
 
 struct BiasParams
 {
   double x;
   double theta;
+  double mid_leg_len_theta;
+  double high_leg_len_theta;
   double pitch;
   double roll;
   double raw_pitch;
@@ -75,6 +78,7 @@ struct LegStateThresholdParams
   double upstair_exit_theta_threshold;
   double upstair_exit_length_threshold;
   double unstick_threshold;
+  double arrive_time_threshold;
 };
 
 struct LegCommand
@@ -91,7 +95,7 @@ enum LegOrientation
   BEHIND
 };
 
-enum JumpPhase
+enum JumpPhase : std::uint8_t
 {
   LEG_RETRACTION,
   JUMP_UP,
@@ -106,6 +110,7 @@ enum BalanceMode
   SIT_DOWN,
   RECOVER,
   UPSTAIRS,
+  PROTECT
 };
 
 enum Side
@@ -116,8 +121,18 @@ enum Side
 
 enum
 {
-  LEG_T = 0,
-  LEG_Tp
+  WHEEL_T = 0,
+  LEG_Tp,
+};
+
+enum
+{
+  THETA = 0,
+  D_THETA,
+  POS,
+  VEL,
+  PITCH,
+  D_PITCH,
 };
 
 struct LegState

@@ -21,7 +21,13 @@
 #include <hardware_interface/imu_sensor_interface.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <std_msgs/Float64.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <std_msgs/Bool.h>
+#include <std_srvs/Trigger.h>
+#include <rm_msgs/PowerManagementSampleAndStatusData.h>
+#include <atomic>
+#include <array>
+#include <limits>
 #include "rm_chassis_controllers/chassis_base.h"
 #include <dynamic_reconfigure/server.h>
 #include <rm_chassis_controllers/LQRWeightConfig.h>
@@ -31,6 +37,8 @@
 #include "bipedal_wheel_controller/controller_mode/mode_manager.h"
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include "bipedal_wheel_controller/controller_interface.h"
+
+#include "bipedal_wheel_controller/powerID.h"
 
 namespace rm_chassis_controllers
 {
@@ -71,6 +79,8 @@ public:
   inline void setMoveFlag(const bool& move_flag) override { move_flag_ = move_flag; }
   inline const ChassisState& getChassisState() override { return chassis_state_; };
   inline LegState& getLegState(Side side) override { return leg_state_[side]; };
+  inline bool getDown5cmStairFlag() const override { return down_5cm_stair_flag_.load(std::memory_order_acquire); }
+  inline void setDown5cmStairFlag(bool flag) override { down_5cm_stair_flag_.store(flag, std::memory_order_release); }
   inline void setStateChange(bool state) override { balance_state_changed_ = state; }
   inline void setCompleteStand(bool state) override { complete_stand_ = state; }
   void setJumpCmd(bool cmd) override { jumpCmd_ = cmd; }
@@ -85,9 +95,15 @@ public:
   void pubLegLenStatus(const bool& upstair_flag) override;
   void clearStatus() override;
   void pubDebugData(const std::string& name, double value) override{ debugPub_->add(name, value); };
+  void setRecoveryLegSpdTurnback(bool recovery_leg_spd_turnback) override { recovery_leg_spd_turnback_ = recovery_leg_spd_turnback; }
+  bool getRecoveryLegSpdTurnback() const override { return recovery_leg_spd_turnback_;}
+  inline const Eigen::Matrix<double, 12, 1>& getPowerCoeffs() { return *power_coeffs_rt_buffer_.readFromRT(); }
   // clang-format on
 private:
   void updateEstimation(const ros::Time& time, const ros::Duration& period);
+  void updatePowerModel(const ros::Time& time, const ros::Duration& period);
+  void onPowerMeas(const rm_msgs::PowerManagementSampleAndStatusData::ConstPtr& msg);
+
   bool setupLQR(ros::NodeHandle& controller_nh);
   bool setupParams(ros::NodeHandle& controller_nh);
   bool setupModelParams(ros::NodeHandle& controller_nh);
@@ -98,6 +114,11 @@ private:
   bool setupChassisGeometryParams(ros::NodeHandle& controller_nh);
   void polyfit(const std::vector<Eigen::Matrix<double, 2, 6>>& Ks, const std::vector<double>& L0s,
                Eigen::Matrix<double, 4, 12>& coeffs);
+  void triggerDown5cmStairAction()
+  {
+    down_5cm_stair_flag_.store(true, std::memory_order_release);
+  }
+  bool down5cmStairSrvCallback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
   geometry_msgs::Twist odometry() override;
 
   void reconfigCB(rm_chassis_controllers::LQRWeightConfig& config, uint32_t level);
@@ -129,10 +150,13 @@ private:
   ChassisState chassis_state_;
   LegState leg_state_[2];
   //  Eigen::Matrix<double, STATE_DIM, 1> x_left_{}, x_right_{};
-  double default_leg_length_{ 0.13 };
+  double default_leg_length_{ 0.12 };
   bool move_flag_{ false };
+  std::atomic_bool down_5cm_stair_flag_{ false };
   // stand up
   bool complete_stand_ = false, overturn_ = false;
+  // recovery
+  bool recovery_leg_spd_turnback_{ false };
 
   // handles
   hardware_interface::ImuSensorHandle imu_handle_, gimbal_imu_handle_;
@@ -150,12 +174,34 @@ private:
   realtime_tools::RealtimeBuffer<LQRConfig> config_rt_buffer_;
   LQRConfig config_{};
   bool dynamic_reconfig_initialized_{ false };
-  ros::Subscriber leg_cmd_sub_;
+  ros::Subscriber leg_cmd_sub_, recovery_leg_spd_turnback_sub_;
+  ros::Subscriber power_status_sub_;  // 裁判系统底盘功率订阅
   ros::Publisher unstick_pub_, upstair_status_pub_;
+
+  // Power model online identification (RLS)
+  PowerModel power_model_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>> power_model_pub_;
+  realtime_tools::RealtimeBuffer<Eigen::Matrix<double, 12, 1>> power_coeffs_rt_buffer_;
+
+  // 与裁判系统功率对齐用的状态环形缓冲（RT 线程写入，referee 回调线程读取）
+  struct PowerSample
+  {
+    ros::Time stamp;
+    double v{}, omega{}, a{}, alpha{};
+  };
+  static constexpr int POWER_BUFFER_SIZE = 500;  // 1kHz 下覆盖 500ms
+  std::array<PowerSample, POWER_BUFFER_SIZE> power_buffer_{};
+  std::atomic<int> power_buffer_head_{ 0 };
+  std::atomic<double> chassis_power_meas_{ 0.0 };  // 最新底盘功率（W）
+  std::atomic<double> chassis_power_stamp_{ 0.0 };
+  double last_yaw_rate_{ 0.0 };  // 上周期偏航角速度，用于差分求角加速度
+  ros::Time last_power_update_time_{};
+
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>> legged_chassis_status_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>> legged_chassis_mode_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>> lqr_status_pub_;
   ros::Time cmd_update_time_;
   std::shared_ptr<DebugDataPublisher> debugPub_;
+  ros::ServiceServer down_5cm_stair_srv_;
 };
 }  // namespace rm_chassis_controllers

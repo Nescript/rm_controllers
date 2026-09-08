@@ -36,6 +36,7 @@
 //
 #include "rm_gimbal_controllers/gimbal_base.h"
 
+#include <cmath>
 #include <string>
 #include <angles/angles.h>
 #include <rm_common/ros_utilities.h>
@@ -66,6 +67,26 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
   chassis_vel_ = std::make_shared<ChassisVel>(chassis_vel_nh);
   ros::NodeHandle nh_bullet_solver = ros::NodeHandle(controller_nh, "bullet_solver");
   bullet_solver_ = std::make_shared<BulletSolver>(nh_bullet_solver);
+  std::string track_solver_type;
+  controller_nh.param<std::string>("track_solver_type", track_solver_type, "bullet_solver");
+  if (track_solver_type == "external_aim")
+  {
+    track_solver_type_ = TrackSolverType::EXTERNAL_MPC_AIM;
+    ROS_WARN("[Gimbal] track_solver_type=external_aim is deprecated, using external_mpc_aim instead");
+  }
+  else if (track_solver_type == "external_mpc_aim")
+  {
+    track_solver_type_ = TrackSolverType::EXTERNAL_MPC_AIM;
+    ROS_INFO("[Gimbal] TRACK mode uses external MPC aim solver");
+  }
+  else if (track_solver_type != "bullet_solver")
+  {
+    track_solver_type_ = TrackSolverType::BULLET_SOLVER;
+    ROS_WARN("[Gimbal] Unknown track_solver_type '%s', falling back to bullet_solver", track_solver_type.c_str());
+  }
+  controller_nh.param("external_aim_timeout", external_aim_timeout_, 0.1);
+  std::string external_mpc_aim_topic;
+  controller_nh.param<std::string>("external_mpc_aim_topic", external_mpc_aim_topic, "/sp_vision/mpc_gimbal_aim");
 
   config_ = { .yaw_k_v_ = getParam(controller_nh, "controllers/yaw/k_v", 0.),
               .pitch_k_v_ = getParam(controller_nh, "controllers/pitch/k_v", 0.),
@@ -109,7 +130,6 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
         axis = (joint_urdf->axis.x == 1) * 0 + (joint_urdf->axis.y == 1) * 1 + (joint_urdf->axis.z == 1) * 2;
         joint_urdfs_.insert(std::make_pair(axis, joint_urdf));
       }
-
       ctrls_.insert(std::make_pair(axis, std::make_unique<effort_controllers::JointVelocityController>()));
       pid_pos_.insert(std::make_pair(axis, std::make_unique<control_toolbox::Pid>()));
       pos_des_in_limit_.insert(std::make_pair(axis, true));
@@ -135,6 +155,10 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
   {
     ROS_INFO("Param imu_name has not set, use motors' data instead of imu.");
   }
+  if (has_imu_)
+  {
+    ROS_WARN_ONCE("has imu");
+  }
 
   gimbal_des_frame_id_ = getGimbalFrameID(joint_urdfs_) + "_des";
   odom2gimbal_des_.header.frame_id = "odom";
@@ -147,10 +171,25 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
   odom2base_.child_frame_id = getBaseFrameID(joint_urdfs_);
   odom2base_.transform.rotation.w = 1.;
 
+  odom2gimbal_traject_des_.header.frame_id = "odom";
+  odom2gimbal_traject_des_.child_frame_id = gimbal_traject_des_frame_id_;
+  odom2gimbal_traject_des_.transform.rotation.w = 1.;
+
+  rm_msgs::GimbalCmd default_cmd;
+  rm_msgs::TrackData default_track;
+  rm_msgs::MPCGimbalAimCmd default_aim;
+  cmd_rt_buffer_.initRT(default_cmd);
+  track_rt_buffer_.initRT(default_track);
+  gimbal_aim_rt_buffer_.initRT(default_aim);
+
   cmd_gimbal_sub_ = controller_nh.subscribe<rm_msgs::GimbalCmd>("command", 1, &Controller::commandCB, this);
-  data_track_sub_ = controller_nh.subscribe<rm_msgs::TrackData>("/track", 1, &Controller::trackCB, this);
+  data_track_sub_ = controller_nh.subscribe<rm_msgs::TrackData>("/sp_vision/track", 1, &Controller::trackCB, this);
+  mpc_gimbal_aim_sub_ = controller_nh.subscribe<rm_msgs::MPCGimbalAimCmd>(
+      external_mpc_aim_topic, 1, &Controller::mpcGimbalAimCB, this);
   publish_rate_ = getParam(controller_nh, "publish_rate", 100.);
   error_pub_.reset(new realtime_tools::RealtimePublisher<rm_msgs::GimbalDesError>(controller_nh, "error", 100));
+  shoot_beforehand_cmd_pub_.reset(
+      new realtime_tools::RealtimePublisher<rm_msgs::ShootBeforehandCmd>(controller_nh, "shoot_beforehand_cmd", 10));
 
   return true;
 }
@@ -166,7 +205,10 @@ void Controller::update(const ros::Time& time, const ros::Duration& period)
 {
   cmd_gimbal_ = *cmd_rt_buffer_.readFromRT();
   data_track_ = *track_rt_buffer_.readFromNonRT();
+  gimbal_aim_ = *gimbal_aim_rt_buffer_.readFromRT();
   config_ = *config_rt_buffer_.readFromRT();
+  period_ = period;
+  time_ = time;
   try
   {
     odom2gimbal_ = robot_state_handle_.lookupTransform("odom", odom2gimbal_.child_frame_id, time);
@@ -189,7 +231,10 @@ void Controller::update(const ros::Time& time, const ros::Duration& period)
       rate(time, period);
       break;
     case TRACK:
-      track(time);
+      if (track_solver_type_ == TrackSolverType::EXTERNAL_MPC_AIM)
+        externalAimTrack(time);
+      else
+        track(time);
       break;
     case DIRECT:
       direct(time);
@@ -201,21 +246,37 @@ void Controller::update(const ros::Time& time, const ros::Duration& period)
   moveJoint(time, period);
 }
 
-void Controller::setDes(const ros::Time& time, double yaw_des, double pitch_des)
+void Controller::setDes(const ros::Time& time, double yaw_des, double pitch_des, double traject_yaw_des,
+                        bool update_yaw, bool update_pitch)
 {
-  tf2::Quaternion odom2base, odom2gimbal_des;
+  tf2::Quaternion odom2base, odom2gimbal_des_q, base2gimbal_des, base2gimbal_traject_des;
   tf2::fromMsg(odom2base_.transform.rotation, odom2base);
-  odom2gimbal_des.setRPY(0, pitch_des, yaw_des);
-  tf2::Quaternion base2gimbal_des = odom2base.inverse() * odom2gimbal_des;
+  tf2::fromMsg(odom2gimbal_des_.transform.rotation, odom2gimbal_des_q);
+
+  double current_rpy[3], des_rpy[3], traject_rpy[3];
+  quatToRPY(toMsg(odom2base.inverse() * odom2gimbal_des_q), current_rpy[0], current_rpy[1], current_rpy[2]);
+  odom2gimbal_des_q.setRPY(0, pitch_des, yaw_des);
+  quatToRPY(toMsg(odom2base.inverse() * odom2gimbal_des_q), des_rpy[0], des_rpy[1], des_rpy[2]);
+  odom2gimbal_des_q.setRPY(0, pitch_des, traject_yaw_des);
+  quatToRPY(toMsg(odom2base.inverse() * odom2gimbal_des_q), traject_rpy[0], traject_rpy[1], traject_rpy[2]);
+
   for (const auto& it : joint_urdfs_)
-    pos_des_in_limit_[it.first] = setDesIntoLimit(base2gimbal_des, it.second, base2gimbal_des);
+  {
+    bool update = (it.first == 1) ? update_pitch : ((it.first == 2) ? update_yaw : true);
+    pos_des_in_limit_[it.first] = setDesIntoLimit(des_rpy[it.first], it.second, update, current_rpy[it.first]);
+  }
+
+  base2gimbal_des.setRPY(des_rpy[0], des_rpy[1], des_rpy[2]);
+  base2gimbal_traject_des.setRPY(traject_rpy[0], traject_rpy[1], traject_rpy[2]);
   odom2gimbal_des_.transform.rotation = tf2::toMsg(odom2base * base2gimbal_des);
+  odom2gimbal_traject_des_.transform.rotation = tf2::toMsg(odom2base * base2gimbal_traject_des);
   odom2gimbal_des_.header.stamp = time;
   robot_state_handle_.setTransform(odom2gimbal_des_, "rm_gimbal_controllers");
 }
 
 void Controller::rate(const ros::Time& time, const ros::Duration& period)
 {
+  bullet_solver_->CleanTrackCount();
   if (state_changed_)
   {  // on enter
     state_changed_ = false;
@@ -232,12 +293,27 @@ void Controller::rate(const ros::Time& time, const ros::Duration& period)
   {
     double roll{}, pitch{}, yaw{};
     quatToRPY(odom2gimbal_des_.transform.rotation, roll, pitch, yaw);
-    setDes(time, yaw + period.toSec() * cmd_gimbal_.rate_yaw, pitch + period.toSec() * cmd_gimbal_.rate_pitch);
+
+    bool pitch_needs_update = std::abs(cmd_gimbal_.rate_pitch) > 1e-6;
+    bool yaw_needs_update = std::abs(cmd_gimbal_.rate_yaw) > 1e-6;
+
+    double new_yaw = yaw_needs_update ? (yaw + period.toSec() * cmd_gimbal_.rate_yaw) : yaw;
+    double new_pitch = pitch_needs_update ? (pitch + period.toSec() * cmd_gimbal_.rate_pitch) : pitch;
+
+    setDes(time, new_yaw, new_pitch, new_yaw, yaw_needs_update, pitch_needs_update);
   }
 }
 
 void Controller::track(const ros::Time& time)
 {
+  external_aim_active_ = false;
+  if (data_track_.header.stamp.toSec() - time.toSec() > 0.5)
+  {
+    state_ = RATE;
+    state_changed_ = true;
+    rate(time, period_);
+    return;
+  }
   if (state_changed_)
   {  // on enter
     state_changed_ = false;
@@ -278,8 +354,8 @@ void Controller::track(const ros::Time& time)
   target_vel.z -= chassis_vel_->linear_->z();
   bool solve_success = bullet_solver_->solve(target_pos, target_vel, cmd_gimbal_.bullet_speed, yaw, data_track_.v_yaw,
                                              data_track_.radius_1, data_track_.radius_2, data_track_.dz,
-                                             data_track_.armors_num, chassis_vel_->angular_->z());
-  bullet_solver_->judgeShootBeforehand(time, data_track_.v_yaw);
+                                             data_track_.armors_num, gimbal_real_z_vel_, data_track_.id);
+  publishShootBeforehand(time, bullet_solver_->judgeShootBeforehand(data_track_.v_yaw, data_track_.id));
 
   if (publish_rate_ > 0.0 && last_publish_time_ + ros::Duration(1.0 / publish_rate_) < time)
   {
@@ -298,11 +374,64 @@ void Controller::track(const ros::Time& time)
   }
 
   if (solve_success)
-    setDes(time, bullet_solver_->getYaw(), bullet_solver_->getPitch());
+    setDes(time, bullet_solver_->getYaw(), bullet_solver_->getPitch(), bullet_solver_->getTrajectYaw());
   else
   {
     odom2gimbal_des_.header.stamp = time;
     robot_state_handle_.setTransform(odom2gimbal_des_, "rm_gimbal_controllers");
+  }
+}
+
+bool Controller::externalAimIsFresh(const ros::Time& time) const
+{
+  if (!gimbal_aim_.valid || gimbal_aim_.header.stamp.isZero())
+    return false;
+  const double age = (time - gimbal_aim_.header.stamp).toSec();
+  return age >= -external_aim_timeout_ && age <= external_aim_timeout_;
+}
+
+void Controller::externalAimTrack(const ros::Time& time)
+{
+  if (state_changed_)
+  {
+    state_changed_ = false;
+    ROS_INFO("[Gimbal] Enter TRACK with external aim");
+  }
+
+  external_aim_active_ = externalAimIsFresh(time);
+  if (external_aim_active_)
+  {
+    setDes(time, gimbal_aim_.target_yaw, gimbal_aim_.pitch, gimbal_aim_.yaw);
+    publishShootBeforehand(time, gimbal_aim_.shoot_cmd == 1 ? rm_msgs::ShootBeforehandCmd::ALLOW_SHOOT :
+                                                            rm_msgs::ShootBeforehandCmd::BAN_SHOOT);
+  }
+  else
+  {
+    odom2gimbal_des_.header.stamp = time;
+    robot_state_handle_.setTransform(odom2gimbal_des_, "rm_gimbal_controllers");
+    publishShootBeforehand(time, rm_msgs::ShootBeforehandCmd::BAN_SHOOT);
+  }
+
+  if (publish_rate_ > 0.0 && last_publish_time_ + ros::Duration(1.0 / publish_rate_) < time)
+  {
+    if (error_pub_->trylock())
+    {
+      error_pub_->msg_.stamp = time;
+      error_pub_->msg_.error =
+          external_aim_active_ && std::isfinite(gimbal_aim_.error) ? gimbal_aim_.error : 1.0;
+      error_pub_->unlockAndPublish();
+    }
+    last_publish_time_ = time;
+  }
+}
+
+void Controller::publishShootBeforehand(const ros::Time& time, uint8_t cmd)
+{
+  if (shoot_beforehand_cmd_pub_ && shoot_beforehand_cmd_pub_->trylock())
+  {
+    shoot_beforehand_cmd_pub_->msg_.stamp = time;
+    shoot_beforehand_cmd_pub_->msg_.cmd = cmd;
+    shoot_beforehand_cmd_pub_->unlockAndPublish();
   }
 }
 
@@ -330,7 +459,7 @@ void Controller::direct(const ros::Time& time)
   double pitch = -std::atan2(aim_point_odom.z - odom2gimbal_.transform.translation.z,
                              std::sqrt(std::pow(aim_point_odom.x - odom2gimbal_.transform.translation.x, 2) +
                                        std::pow(aim_point_odom.y - odom2gimbal_.transform.translation.y, 2)));
-  setDes(time, yaw, pitch);
+  setDes(time, yaw, pitch, yaw);
 }
 
 void Controller::traj(const ros::Time& time)
@@ -361,32 +490,34 @@ void Controller::traj(const ros::Time& time)
   {
     ROS_WARN("%s", ex.what());
   }
-  setDes(time, traj[2], traj[1]);
+  setDes(time, traj[2], traj[1], traj[2]);
 }
 
-bool Controller::setDesIntoLimit(const tf2::Quaternion& base2gimbal_des, const urdf::JointConstSharedPtr& joint_urdf,
-                                 tf2::Quaternion& base2new_des)
+bool Controller::setDesIntoLimit(double& angle, const urdf::JointConstSharedPtr& joint_urdf, bool update,
+                                 double current_angle)
 {
-  double base2gimbal_current_des[3];
-  quatToRPY(toMsg(base2gimbal_des), base2gimbal_current_des[0], base2gimbal_current_des[1], base2gimbal_current_des[2]);
+  // 如果不需要更新该轴，保持当前值不变
+  if (!update)
+  {
+    angle = current_angle;
+    return true;
+  }
+
   double upper_limit = joint_urdf->limits ? joint_urdf->limits->upper : 1e16;
   double lower_limit = joint_urdf->limits ? joint_urdf->limits->lower : -1e16;
-  int index = (joint_urdf->axis.x == 1) * 0 + (joint_urdf->axis.y == 1) * 1 + (joint_urdf->axis.z == 1) * 2;
-  if ((base2gimbal_current_des[index] <= upper_limit && base2gimbal_current_des[index] >= lower_limit) ||
-      (angles::two_pi_complement(base2gimbal_current_des[index]) <= upper_limit &&
-       angles::two_pi_complement(base2gimbal_current_des[index]) >= lower_limit))
+
+  if ((angle <= upper_limit && angle >= lower_limit) ||
+      (angles::two_pi_complement(angle) <= upper_limit && angles::two_pi_complement(angle) >= lower_limit))
   {
-    base2new_des = base2gimbal_des;
     return true;
   }
   else
   {
-    base2gimbal_current_des[index] =
-        std::abs(angles::shortest_angular_distance(base2gimbal_current_des[index], upper_limit)) <
-                std::abs(angles::shortest_angular_distance(base2gimbal_current_des[index], lower_limit)) ?
-            upper_limit :
-            lower_limit;
-    base2new_des.setRPY(base2gimbal_current_des[0], base2gimbal_current_des[1], base2gimbal_current_des[2]);
+    // 超限时，钳位到最近的限位值
+    angle = std::abs(angles::shortest_angular_distance(angle, upper_limit)) <
+                    std::abs(angles::shortest_angular_distance(angle, lower_limit)) ?
+                upper_limit :
+                lower_limit;
     return false;
   }
 }
@@ -420,11 +551,14 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
     if (ctrls_.find(2) != ctrls_.end())
       angular_vel.z = ctrls_.at(2)->joint_.getVelocity();
   }
-  double pos_real[3]{ 0. }, pos_des[3]{ 0. }, vel_des[3]{ 0. }, angle_error[3]{ 0. };
+  gimbal_real_z_vel_ = angular_vel.z;
   quatToRPY(odom2gimbal_des_.transform.rotation, pos_des[0], pos_des[1], pos_des[2]);
   quatToRPY(odom2gimbal_.transform.rotation, pos_real[0], pos_real[1], pos_real[2]);
+  quatToRPY(odom2gimbal_traject_des_.transform.rotation, traject_pos_des[0], traject_pos_des[1], traject_pos_des[2]);
   for (int i = 0; i < 3; i++)
     angle_error[i] = angles::shortest_angular_distance(pos_real[i], pos_des[i]);
+  for (int i = 0; i < 3; i++)
+    traject_angle_error[i] = angles::shortest_angular_distance(pos_real[i], traject_pos_des[i]);
   if (state_ == RATE)
   {
     vel_des[2] = cmd_gimbal_.rate_yaw;
@@ -432,57 +566,78 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
   }
   else if (state_ == TRACK)
   {
-    geometry_msgs::Point target_pos;
-    geometry_msgs::Vector3 target_vel;
-    if (data_track_.id != 12)
+    if (track_solver_type_ == TrackSolverType::EXTERNAL_MPC_AIM)
     {
-      geometry_msgs::Point pos = data_track_.position;
-      double yaw = data_track_.yaw + data_track_.v_yaw * ((time - data_track_.header.stamp).toSec());
-      pos.x += data_track_.velocity.x * (time - data_track_.header.stamp).toSec();
-      pos.y += data_track_.velocity.y * (time - data_track_.header.stamp).toSec();
-      pos.z += data_track_.velocity.z * (time - data_track_.header.stamp).toSec();
-      bullet_solver_->getSelectedArmorPosAndVel(target_pos, target_vel, pos, data_track_.velocity, yaw,
-                                                data_track_.v_yaw, data_track_.radius_1, data_track_.radius_2,
-                                                data_track_.dz, data_track_.armors_num);
+      if (external_aim_active_ && externalAimIsFresh(time))
+      {
+        vel_des[2] = gimbal_aim_.yaw_rate;
+        vel_des[1] = gimbal_aim_.pitch_rate;
+      }
+      else
+      {
+        vel_des[2] = 0.;
+        vel_des[1] = 0.;
+      }
     }
     else
     {
-      target_pos = data_track_.position;
-      target_vel = data_track_.velocity;
-    }
-    target_vel.x -= chassis_vel_->linear_->x();
-    target_vel.y -= chassis_vel_->linear_->y();
-    target_vel.z -= chassis_vel_->linear_->z();
-    tf2::Vector3 target_pos_tf, target_vel_tf;
-    try
-    {
-      geometry_msgs::TransformStamped transform;
-      if (joint_urdfs_.find(2) != joint_urdfs_.end())
+      geometry_msgs::Point target_pos;
+      geometry_msgs::Vector3 target_vel;
+      if (data_track_.id != 12)
       {
-        transform = robot_state_handle_.lookupTransform(odom2base_.child_frame_id, data_track_.header.frame_id,
-                                                        data_track_.header.stamp);
-        tf2::doTransform(target_pos, target_pos, transform);
-        tf2::doTransform(target_vel, target_vel, transform);
-        tf2::fromMsg(target_pos, target_pos_tf);
-        tf2::fromMsg(target_vel, target_vel_tf);
-        vel_des[2] = target_pos_tf.cross(target_vel_tf).z() / std::pow((target_pos_tf.length()), 2);
+        geometry_msgs::Point pos = data_track_.position;
+        double yaw = data_track_.yaw + data_track_.v_yaw * ((time - data_track_.header.stamp).toSec());
+        pos.x += data_track_.velocity.x * (time - data_track_.header.stamp).toSec();
+        pos.y += data_track_.velocity.y * (time - data_track_.header.stamp).toSec();
+        pos.z += data_track_.velocity.z * (time - data_track_.header.stamp).toSec();
+        bullet_solver_->getSelectedArmorPosAndVel(target_pos, target_vel, pos, data_track_.velocity, yaw,
+                                                  data_track_.v_yaw, data_track_.radius_1, data_track_.radius_2,
+                                                  data_track_.dz, data_track_.armors_num);
       }
-      if (joint_urdfs_.find(1) != joint_urdfs_.end())
+      else
       {
-        transform = robot_state_handle_.lookupTransform(joint_urdfs_.at(1)->parent_link_name,
-                                                        data_track_.header.frame_id, data_track_.header.stamp);
-        tf2::doTransform(target_pos, target_pos, transform);
-        tf2::doTransform(target_vel, target_vel, transform);
-        tf2::fromMsg(target_pos, target_pos_tf);
-        tf2::fromMsg(target_vel, target_vel_tf);
-        vel_des[1] = target_pos_tf.cross(target_vel_tf).y() / std::pow((target_pos_tf.length()), 2);
+        target_pos = data_track_.position;
+        target_vel = data_track_.velocity;
       }
-    }
-    catch (tf2::TransformException& ex)
-    {
-      ROS_WARN("%s", ex.what());
+      target_vel.x -= chassis_vel_->linear_->x();
+      target_vel.y -= chassis_vel_->linear_->y();
+      target_vel.z -= chassis_vel_->linear_->z();
+      tf2::Vector3 target_pos_tf, target_vel_tf;
+      try
+      {
+        geometry_msgs::TransformStamped transform;
+        if (joint_urdfs_.find(2) != joint_urdfs_.end())
+        {
+          transform = robot_state_handle_.lookupTransform(odom2base_.child_frame_id, data_track_.header.frame_id,
+                                                          data_track_.header.stamp);
+          tf2::doTransform(target_pos, target_pos, transform);
+          tf2::doTransform(target_vel, target_vel, transform);
+          tf2::fromMsg(target_pos, target_pos_tf);
+          tf2::fromMsg(target_vel, target_vel_tf);
+          vel_des[2] = target_pos_tf.cross(target_vel_tf).z() / std::pow((target_pos_tf.length()), 2);
+        }
+        if (bullet_solver_->getUsingtraject() && bullet_solver_->getTrackTarget())
+        {
+          vel_des[2] = bullet_solver_->getTrajectVel();
+        }
+        if (joint_urdfs_.find(1) != joint_urdfs_.end())
+        {
+          transform = robot_state_handle_.lookupTransform(joint_urdfs_.at(1)->parent_link_name,
+                                                          data_track_.header.frame_id, data_track_.header.stamp);
+          tf2::doTransform(target_pos, target_pos, transform);
+          tf2::doTransform(target_vel, target_vel, transform);
+          tf2::fromMsg(target_pos, target_pos_tf);
+          tf2::fromMsg(target_vel, target_vel_tf);
+          vel_des[1] = target_pos_tf.cross(target_vel_tf).y() / std::pow((target_pos_tf.length()), 2);
+        }
+      }
+      catch (tf2::TransformException& ex)
+      {
+        ROS_WARN("%s", ex.what());
+      }
     }
   }
+
   for (const auto& in_limit : pos_des_in_limit_)
     if (!in_limit.second)
       vel_des[in_limit.first] = 0.;
@@ -497,10 +652,36 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
   }
   if (pid_pos_.find(2) != pid_pos_.end() && ctrls_.find(2) != ctrls_.end())
   {
-    pid_pos_.at(2)->computeCommand(angle_error[2], period);
-    ctrls_.at(2)->setCommand(pid_pos_.at(2)->getCurrentCmd() -
-                             updateCompensation(chassis_vel_->angular_->z()) * chassis_vel_->angular_->z() +
-                             config_.yaw_k_v_ * vel_des[2] + ctrls_.at(2)->joint_.getVelocity() - angular_vel.z);
+    if (state_ == TRACK)
+    {
+      pid_pos_.at(2)->computeCommand(traject_angle_error[2], period);
+    }
+    else
+    {
+      pid_pos_.at(2)->computeCommand(angle_error[2], period);
+    }
+    if (state_ == TRACK)
+    {
+      if (bullet_solver_->getUsingtraject() && bullet_solver_->getTrackTarget())
+      {
+        ctrls_.at(2)->setCommand(pid_pos_.at(2)->getCurrentCmd() -
+                                 updateCompensation(chassis_vel_->angular_->z()) * chassis_vel_->angular_->z() +
+                                 config_.yaw_k_v_ * vel_des[2] + ctrls_.at(2)->joint_.getVelocity() - angular_vel.z);
+      }
+      else
+      {
+        ctrls_.at(2)->setCommand(pid_pos_.at(2)->getCurrentCmd() -
+                                 updateCompensation(chassis_vel_->angular_->z()) * chassis_vel_->angular_->z() +
+                                 config_.yaw_k_v_ * vel_des[2] + ctrls_.at(2)->joint_.getVelocity() - angular_vel.z);
+      }
+    }
+    else
+    {
+      ctrls_.at(2)->setCommand(pid_pos_.at(2)->getCurrentCmd() -
+                               updateCompensation(chassis_vel_->angular_->z()) * chassis_vel_->angular_->z() +
+                               config_.yaw_k_v_ * vel_des[2] + ctrls_.at(2)->joint_.getVelocity() - angular_vel.z);
+    }
+
     ctrls_.at(2)->update(time, period);
   }
 
@@ -513,10 +694,12 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
       {
         pub.second->msg_.header.stamp = time;
         pub.second->msg_.set_point = pos_des[pub.first];
+        pub.second->msg_.traject_set_point = traject_pos_des[pub.first];
         pub.second->msg_.set_point_dot = vel_des[pub.first];
         pub.second->msg_.process_value = pos_real[pub.first];
         pub.second->msg_.error = angle_error[pub.first];
         pub.second->msg_.command = pid_pos_[pub.first]->getCurrentCmd();
+        pub.second->msg_.shoot_number = bullet_solver_->getShootnum();
         pub.second->unlockAndPublish();
       }
     }
@@ -606,6 +789,11 @@ void Controller::trackCB(const rm_msgs::TrackDataConstPtr& msg)
   if (msg->id == 0)
     return;
   track_rt_buffer_.writeFromNonRT(*msg);
+}
+
+void Controller::mpcGimbalAimCB(const rm_msgs::MPCGimbalAimCmdConstPtr& msg)
+{
+  gimbal_aim_rt_buffer_.writeFromNonRT(*msg);
 }
 
 void Controller::reconfigCB(rm_gimbal_controllers::GimbalBaseConfig& config, uint32_t /*unused*/)
