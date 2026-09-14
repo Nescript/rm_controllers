@@ -72,6 +72,12 @@ include_directories(
 
 set(BIPEDAL_SOURCES
         src/bipedal_wheel/ros/controller.cpp
+        src/bipedal_wheel/core/fsm/state_normal.cpp
+        src/bipedal_wheel/core/fsm/state_protect.cpp
+        src/bipedal_wheel/core/fsm/state_recover.cpp
+        src/bipedal_wheel/core/fsm/state_sit_down.cpp
+        src/bipedal_wheel/core/fsm/state_stand_up.cpp
+        src/bipedal_wheel/core/fsm/state_upstairs.cpp
         src/bipedal_wheel/core/dynamics/gen_A.c
         src/bipedal_wheel/core/dynamics/gen_B.c
         src/bipedal_wheel/core/vmc/VMC.cpp

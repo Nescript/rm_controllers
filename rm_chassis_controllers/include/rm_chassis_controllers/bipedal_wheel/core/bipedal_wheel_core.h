@@ -4,6 +4,7 @@
 
 #pragma once
 #include "bipedal_wheel/core/core_types.h"
+#include "bipedal_wheel/core/helper_functions.h"
 #include "bipedal_wheel/core/vmc/VMC.h"
 #include "bipedal_wheel/core/fsm/state_sit_down.h"
 #include "bipedal_wheel/core/fsm/state_stand_up.h"

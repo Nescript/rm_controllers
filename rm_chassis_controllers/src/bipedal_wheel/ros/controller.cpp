@@ -130,7 +130,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
 
   try
   {
-    // 将 imu 数据变换到 base link 坐标系
+    // transfor imu date to base link
     tf2::Vector3 gyro_tf2(gyro.x, gyro.y, gyro.z);
     tf2::Vector3 angular_vel_base_tf2 = imu2base_tf_ * gyro_tf2;
     angular_vel_base.x = angular_vel_base_tf2.x();

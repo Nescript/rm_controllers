@@ -11,7 +11,7 @@ namespace bipedal_wheel_core
 // 机器人状态机枚举
 enum class RobotPhysicalState
 {
-  UNSTABLE_PROTECT = 0,  // 失稳/过载保护状态
+  UNSTABLE_PROTECT = 0,  // 保护状态
   FALLEN,       // 倾覆/倒地状态
   GETTING_UP,   // 试图起立中
   STAND         // 平衡站立控制状态
