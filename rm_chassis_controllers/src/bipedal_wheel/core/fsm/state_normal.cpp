@@ -20,13 +20,16 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   if (!ctx.balance_state_changed)
   {
     ctx.logger.info("[balance] Enter NORMAL");
-    // Clear status: in legacy, it sets slip_flag_ to false, reset filters, etc.
-    // We can reset our local variables here
     jump_phase_ = JumpPhase::IDLE;
     pos_des_ = 0.0;
     jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
+    off_ground_timer_ = 0.0;
+    jump_contact_detector_.reset();
+    support_force_history_[LEFT] = SupportForceHistory{};
+    support_force_history_[RIGHT] = SupportForceHistory{};
+    leftSupportForceAveragePtr_->clear();
+    rightSupportForceAveragePtr_->clear();
     ctx.balance_state_changed = true;
-    filtered_alpha_ = 1.0;
   }
 
   const auto& chassis_state = ctx.sens_in.chassis_state;
@@ -77,7 +80,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   double current_leg_length = (left_pos.L0 + right_pos.L0) / 2.0;
   if (std::abs(ctx.lqr_status.dx) < 0.1 && std::abs(ctx.cmd_in.vel_cmd.x()) < 0.01)
   {
-    ctx.recovery_leg_spd_turnback = false;  // maps to setMoveFlag(false)
+    ctx.move_flag = false;
     if (x_offset_flag_)
     {
       x_offset_flag_ = false;
@@ -129,15 +132,31 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
 
   if (ctx.complete_stand)
   {
-    x_left_ref(POS) = x_right_ref(POS) = pos_des_;
     if (ctx.cmd_in.base_state != 1)  // RAW = 1
     {
       x_left_ref(VEL) = x_right_ref(VEL) = friction_circle_alpha * ctx.cmd_in.vel_cmd.x();
+      double theta_bias = bias_params_.theta;
+      x_left(THETA) -= theta_bias;
+      x_right(THETA) -= theta_bias;
+      if (!ctx.move_flag)
+      {
+        x_offset_flag_ = true;
+      }
+      else
+      {
+        pos_des_ = bias_params_.x;
+      }
     }
     else
     {
-      x_left_ref(VEL) = x_right_ref(VEL) = 0.0;
+      x_left_ref(POS) = x_right_ref(POS) = 0.0;
+      x_left_ref(VEL) = x_right_ref(VEL) = ctx.cmd_in.vel_cmd.x();
+      x_left(THETA) -= bias_params_.raw_theta;
+      x_right(THETA) -= bias_params_.raw_theta;
+      x_left(PITCH) -= bias_params_.raw_pitch;
+      x_right(PITCH) -= bias_params_.raw_pitch;
     }
+    x_left_ref(POS) = x_right_ref(POS) = pos_des_;
 
     if (protect_flag_)
     {
@@ -154,28 +173,11 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     leg_length_des = ctx.config.default_leg_length;
   }
 
-  if (ctx.cmd_in.base_state != 1)
-  {
-    if (!ctx.move_flag)
-    {
-      x_offset_flag_ = true;
-      x_left(THETA) -= bias_params_.theta;
-      x_right(THETA) -= bias_params_.theta;
-    }
-  }
-  else
-  {
-    x_left(THETA) -= bias_params_.raw_theta;
-    x_right(THETA) -= bias_params_.raw_theta;
-    x_left(PITCH) -= bias_params_.raw_pitch;
-    x_right(PITCH) -= bias_params_.raw_pitch;
-  }
-
   x_left -= x_left_ref;
   x_right -= x_right_ref;
 
-  clamp(x_left(VEL), -1.2, 1.2);
-  clamp(x_right(VEL), -1.2, 1.2);
+  clamp(x_left(VEL), -1.1, 1.1);
+  clamp(x_right(VEL), -1.1, 1.1);
 
   const double k_pitch = -0.1, b = 0.35;
   double pitch_error_clamp = k_pitch * ctx.lqr_status.dx + b;
@@ -184,79 +186,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   clamp(x_left(THETA), -0.6, 0.6);
   clamp(x_right(THETA), -0.6, 0.6);
 
-  // 1. Calculate unscaled wheel torques using unscaled LQR gains and clamped errors
-  double T_L_unscaled = k_left(WHEEL_T, THETA) * (-x_left(THETA)) +
-                        k_left(WHEEL_T, D_THETA) * (-x_left(D_THETA)) +
-                        k_left(WHEEL_T, POS) * (-x_left(POS)) +
-                        k_left(WHEEL_T, VEL) * (-x_left(VEL)) +
-                        k_left(WHEEL_T, PITCH) * (-x_left(PITCH)) +
-                        k_left(WHEEL_T, D_PITCH) * (-x_left(D_PITCH));
-  double T_R_unscaled = k_right(WHEEL_T, THETA) * (-x_right(THETA)) +
-                        k_right(WHEEL_T, D_THETA) * (-x_right(D_THETA)) +
-                        k_right(WHEEL_T, POS) * (-x_right(POS)) +
-                        k_right(WHEEL_T, VEL) * (-x_right(VEL)) +
-                        k_right(WHEEL_T, PITCH) * (-x_right(PITCH)) +
-                        k_right(WHEEL_T, D_PITCH) * (-x_right(D_PITCH));
-
-  // 2. Wheel velocities
-  double omega_L = ctx.sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel;
-  double omega_R = ctx.sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel;
-
-  // 3. Power Observer estimation
-  double effort_coeff = ctx.cmd_in.effort_coeff;
-  double vel_coeff = ctx.cmd_in.vel_coeff;
-  double power_offset = ctx.cmd_in.power_offset;
-  double power_limit = ctx.cmd_in.power_limit;
-
-  double P_const_offset = vel_coeff * (std::pow(omega_L, 2) + std::pow(omega_R, 2)) - power_offset;
-  double P_est_unscaled = effort_coeff * (std::pow(T_L_unscaled, 2) + std::pow(T_R_unscaled, 2)) +
-                          std::abs(T_L_unscaled * omega_L) + std::abs(T_R_unscaled * omega_R) +
-                          P_const_offset;
-
-  // 4. Calculate K gain scaling factor alpha based on instantaneous unscaled power with a 90% safety buffer
-  double alpha = 1.0;
-  double safety_coeff = 0.9;
-  double safe_power_limit = safety_coeff * power_limit;
-  if (P_est_unscaled > safe_power_limit)
-  {
-    if (safe_power_limit > P_const_offset)
-    {
-      alpha = std::sqrt((safe_power_limit - P_const_offset) / (P_est_unscaled - P_const_offset));
-    }
-    else
-    {
-      alpha = 0.1;
-    }
-  }
-  // Clamp alpha to [0.1, 1.0]
-  if (alpha < 0.1) alpha = 0.1;
-  if (alpha > 1.0) alpha = 1.0;
-
-  // Filter alpha with asymmetric coefficient: drop instantly (1.0) when limiting, recover slowly (0.02)
-  double gamma_alpha = (alpha < filtered_alpha_) ? 1.0 : 0.02;
-  filtered_alpha_ = (1.0 - gamma_alpha) * filtered_alpha_ + gamma_alpha * alpha;
-
-  // Apply filtered_alpha to position and velocity gains for the WHEEL_T row (index 0)
-  k_left(WHEEL_T, POS) *= filtered_alpha_;
-  k_left(WHEEL_T, VEL) *= filtered_alpha_;
-  k_right(WHEEL_T, POS) *= filtered_alpha_;
-  k_right(WHEEL_T, VEL) *= filtered_alpha_;
-
-  // Save outputs to status
-  ctx.lqr_status.k_scale = filtered_alpha_;
-
-  // 5. Compute scaled command
   u_left = k_left * (-x_left);
   u_right = k_right * (-x_right);
-
-  // Compute actual power estimation with scaled torques
-  double T_L_scaled = u_left(WHEEL_T);
-  double T_R_scaled = u_right(WHEEL_T);
-  double P_est_scaled = effort_coeff * (std::pow(T_L_scaled, 2) + std::pow(T_R_scaled, 2)) +
-                        std::abs(T_L_scaled * omega_L) + std::abs(T_R_scaled * omega_R) +
-                        P_const_offset;
-  ctx.lqr_status.power = P_est_scaled;
-  ctx.logger.publishPower(ctx.lqr_status.power, power_limit, filtered_alpha_);
 
   // Compute leg thrust forces
   double gravity = ctx.config.model_params.f_gravity;
@@ -274,13 +205,38 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   double F_pid_left = 0.0, F_pid_right = 0.0, T_wheel_diff = 0.0;
   Eigen::Matrix<double, 2, 1> F_leg = Eigen::Matrix<double, 2, 1>::Zero();
 
+  // Detect landing before computing thrust, so extension stops in this cycle.
+  const bool checking_landing = (jump_phase_ == JumpPhase::OFF_GROUND);
+  bool landing_left_unstick = true, landing_right_unstick = true;
+  if (checking_landing)
+  {
+    landing_left_unstick = unstickDetection_left(
+        ctx.left_vmc->getForceReal().F + left_spring_force, ctx.left_vmc->getForceReal().Tp, left_spd.dL0,
+        left_pos.L0, chassis_state.linear_acc.z(), ctx.config.model_params, x_left, ctx.dt);
+    landing_right_unstick = unstickDetection_right(
+        ctx.right_vmc->getForceReal().F + right_spring_force, ctx.right_vmc->getForceReal().Tp, right_spd.dL0,
+        right_pos.L0, chassis_state.linear_acc.z(), ctx.config.model_params, x_right, ctx.dt);
+    if (jump_contact_detector_.update(leftSupportForceAveragePtr_->output(), rightSupportForceAveragePtr_->output(),
+                                      unstick_threshold, ctx.dt))
+    {
+      jump_phase_ = JumpPhase::IDLE;
+      jumpTime_ = 0;
+      jump_cooldown_counter_ = 0.0;
+      ctx.control_output.clear_jump_cmd = true;
+      ctx.pid_legs[LEFT]->reset();
+      ctx.pid_legs[RIGHT]->reset();
+      ctx.logger.info("[balance] Jump landed");
+    }
+  }
+
   // Check jump sequence
   jump_cooldown_counter_ += ctx.dt;
   if (jump_phase_ == JumpPhase::IDLE && jump_cooldown_counter_ > ctx.config.control.jump_over_time &&
       ctx.cmd_in.jump_cmd)
   {
     jump_phase_ = JumpPhase::LEG_RETRACTION;
-    jump_cooldown_counter_ = 0.0;
+    jumpTime_ = 0;
+    jump_contact_detector_.reset();
     ctx.logger.info("[balance] Jump start");
   }
 
@@ -303,8 +259,12 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     F_leg[LEFT] = F_pid_left - F_inertia_left + gravity / std::cos(left_pos.theta) + F_roll - left_spring_force;
     F_leg[RIGHT] = F_pid_right + F_inertia_right + gravity / std::cos(right_pos.theta) - F_roll - right_spring_force;
 
-    T_wheel_diff = (ctx.cmd_in.base_state == 1) ? ctx.pid_wheel_vel_diff->computeCommand(0.0, ctx.dt) :
-                                                  0.0;  // wheel difference PID
+    double wheel_vel_diff = std::abs(ctx.sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel) -
+                            std::abs(ctx.sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel);
+    T_wheel_diff = (ctx.cmd_in.base_state == 1) ?
+                       std::copysign(1.0, ctx.cmd_in.vel_cmd.z()) *
+                           ctx.pid_wheel_vel_diff->computeCommand(wheel_vel_diff, ctx.dt) :
+                       0.0;
   }
   else
   {
@@ -319,6 +279,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     else if (jump_phase_ == JumpPhase::OFF_GROUND)
       target_jump_len = 0.11;
 
+    leg_length_des = target_jump_len;
+
     double s_left = (left_pos.L0 - 0.12) / (0.35 - 0.11);
     double s_right = (right_pos.L0 - 0.12) / (0.35 - 0.11);
 
@@ -327,10 +289,11 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
       case JumpPhase::IDLE:
         break;
       case JumpPhase::LEG_RETRACTION:
+      {
         ctx.logger.info("[balance] ENTER LEG_RETRACTION");
-        F_leg(LEFT) = ctx.pid_legs[LEFT]->computeCommand(target_jump_len - current_leg_length, ctx.dt) +
+        F_leg(LEFT) = ctx.pid_legs[LEFT]->computeCommand((target_jump_len - 0.02) - current_leg_length, ctx.dt) +
                       gravity / std::cos(left_pos.theta) + F_roll - left_spring_force;
-        F_leg(RIGHT) = ctx.pid_legs[RIGHT]->computeCommand(target_jump_len - current_leg_length, ctx.dt) +
+        F_leg(RIGHT) = ctx.pid_legs[RIGHT]->computeCommand((target_jump_len - 0.02) - current_leg_length, ctx.dt) +
                        gravity / std::cos(right_pos.theta) - F_roll - right_spring_force;
         if (current_leg_length < target_jump_len + 0.02)
         {
@@ -342,42 +305,62 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
           jump_phase_ = JumpPhase::JUMP_UP;
         }
         break;
-
+      }
       case JumpPhase::JUMP_UP:
+      {
         ctx.logger.info("[balance] ENTER JUMP_UP");
-        F_leg(LEFT) = 300 * (1 - 3 * std::pow(s_left, 2) + 2 * std::pow(s_left, 3)) + gravity;
-        F_leg(RIGHT) = 300 * (1 - 3 * std::pow(s_right, 2) + 2 * std::pow(s_right, 3)) + gravity;
-        if (current_leg_length > target_jump_len)
+        F_leg(LEFT) = ctx.config.control.jump_up_force * (1 - 3 * std::pow(s_left, 2) + 2 * std::pow(s_left, 3)) + gravity;
+        F_leg(RIGHT) = ctx.config.control.jump_up_force * (1 - 3 * std::pow(s_right, 2) + 2 * std::pow(s_right, 3)) + gravity;
+        if (current_leg_length > target_jump_len - 0.01)
         {
           jumpTime_++;
         }
-        if (jumpTime_ >= 2)
+        if (jumpTime_ >= 4)
         {
           jumpTime_ = 0;
           jump_phase_ = JumpPhase::OFF_GROUND;
+          off_ground_timer_ = 0.0;
+          jump_contact_detector_.reset();
+          support_force_history_[LEFT] = SupportForceHistory{};
+          support_force_history_[RIGHT] = SupportForceHistory{};
+          leftSupportForceAveragePtr_->clear();
+          rightSupportForceAveragePtr_->clear();
         }
         break;
-
+      }
       case JumpPhase::OFF_GROUND:
+      {
         ctx.logger.info("[balance] ENTER OFF_GROUND");
-        double s_left_flip = 1.0 - s_left;
-        double s_right_flip = 1.0 - s_right;
-        F_leg(LEFT) = -175 * (1 - 3 * std::pow(s_left_flip, 2) + 2 * std::pow(s_left_flip, 3)) - left_spring_force;
-        F_leg(RIGHT) =
-            -175 * (1 - 3 * std::pow(s_right_flip, 2) + 2 * std::pow(s_right_flip, 3)) - right_spring_force;
-
-        if (current_leg_length < target_jump_len + 0.02)
+        off_ground_timer_ += ctx.dt;
+        // Retract for 200 ms from phase entry, then extend until confirmed contact.
+        if (off_ground_timer_ < 0.2)
         {
-          jumpTime_++;
+          double s_left_flip = 1.0 - s_left;
+          double s_right_flip = 1.0 - s_right;
+          F_leg(LEFT) = -ctx.config.control.off_ground_force * (1 - 3 * std::pow(s_left_flip, 2) + 2 * std::pow(s_left_flip, 3)) -
+                        left_spring_force;
+          F_leg(RIGHT) = -ctx.config.control.off_ground_force * (1 - 3 * std::pow(s_right_flip, 2) + 2 * std::pow(s_right_flip, 3)) -
+                         right_spring_force;
         }
-        if (jumpTime_ >= 100)
+        else
         {
-          jumpTime_ = 0;
+          F_leg(LEFT) = 100.0;
+          F_leg(RIGHT) = 100.0;
+        }
+
+        // Safety fallback: flight timeout
+        if (off_ground_timer_ > 1.5)
+        {
           jump_phase_ = JumpPhase::IDLE;
-          jump_cooldown_counter_ = 0.0;  // Reset cooldown
-          ctx.logger.info("[balance] Jump end");
+          jumpTime_ = 0;
+          jump_cooldown_counter_ = 0.0;
+          ctx.control_output.clear_jump_cmd = true;
+          ctx.pid_legs[LEFT]->reset();
+          ctx.pid_legs[RIGHT]->reset();
+          ctx.logger.warn("[balance] Jump flight timeout fallback to IDLE");
         }
         break;
+      }
     }
   }
 
@@ -392,6 +375,12 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   if (jump_phase_ == JumpPhase::OFF_GROUND)
   {
     left_unstick = right_unstick = true;
+  }
+  else if (checking_landing)
+  {
+    // Reuse landing measurements without advancing the filters twice.
+    left_unstick = landing_left_unstick;
+    right_unstick = landing_right_unstick;
   }
   else if (ctx.complete_stand && jump_phase_ != JumpPhase::LEG_RETRACTION &&
            ctx.cmd_in.base_state == 2)  // FOLLOW = 2
@@ -484,34 +473,40 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     ctx.complete_stand = false;
     ctx.logger.info("[balance] Exit NORMAL");
   }
-
-  ctx.move_flag = false;
 }
 
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
-double Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::calculateSupportForce(double F, double Tp, double leg_length, double leg_len_spd, double acc_z,
-                               const Eigen::Matrix<double, STATE_DIM, 1>& x, const LqrModelParams& model_params,
-                               double dt, bool is_left)
+double Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::calculateSupportForce(
+    double F, double Tp, double leg_length, double leg_len_spd, double acc_z,
+    const Eigen::Matrix<double, STATE_DIM, 1>& x, const LqrModelParams& model_params, double dt, bool is_left)
 {
-  double& last_ddot_zM = is_left ? last_ddot_zM_l_ : last_ddot_zM_r_;
-  double& last_dot_theta = is_left ? last_dot_theta_l_ : last_dot_theta_r_;
-  double& last_ddot_theta = is_left ? last_ddot_theta_l_ : last_ddot_theta_r_;
-  double& last_ddot_leg_len = is_left ? last_ddot_leg_len_l_ : last_ddot_leg_len_r_;
-  double* d_leg_len = is_left ? d_leg_len_l_ : d_leg_len_r_;
+  auto& history = support_force_history_[is_left ? LEFT : RIGHT];
+  const double P = F * std::cos(x(0)) + Tp * std::sin(x(0)) / leg_length;
+  if (!(dt > 0.0))
+    return model_params.m_w * model_params.g + P;
 
+  if (!history.initialized)
+  {
+    history.initialized = true;
+    history.ddot_zM = acc_z - model_params.g;
+    history.dot_theta = x(1);
+    for (double& speed : history.leg_len_spd)
+      speed = leg_len_spd;
+  }
+
+  auto& d_leg_len = history.leg_len_spd;
   d_leg_len[0] = d_leg_len[1];
   d_leg_len[1] = d_leg_len[2];
   d_leg_len[2] = leg_len_spd;
 
-  double P = F * std::cos(x(0)) + Tp * std::sin(x(0)) / leg_length;
-  double ddot_zM = 0.3 * (acc_z - model_params.g) + 0.7 * last_ddot_zM;
-  double ddot_theta = 0.3 * ((x(1) - last_dot_theta) / dt) + 0.7 * last_ddot_theta;
-  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / (2.0 * dt) + 0.7 * last_ddot_leg_len;
+  double ddot_zM = 0.3 * (acc_z - model_params.g) + 0.7 * history.ddot_zM;
+  double ddot_theta = 0.3 * ((x(1) - history.dot_theta) / dt) + 0.7 * history.ddot_theta;
+  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / (2.0 * dt) + 0.7 * history.ddot_leg_len;
 
-  last_dot_theta = x(1);
-  last_ddot_theta = ddot_theta;
-  last_ddot_leg_len = ddot_leg_len;
-  last_ddot_zM = ddot_zM;
+  history.ddot_zM = ddot_zM;
+  history.dot_theta = x(1);
+  history.ddot_theta = ddot_theta;
+  history.ddot_leg_len = ddot_leg_len;
 
   double ddot_zw = ddot_zM - ddot_leg_len * std::cos(x(0)) + 2.0 * leg_len_spd * x(1) * std::sin(x(0)) +
                    leg_length * (ddot_theta * std::sin(x(0)) + leg_length * x(1) * x(1) * std::cos(x(0)));
@@ -521,67 +516,23 @@ double Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::cal
 }
 
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
-bool Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::unstickDetection_left(double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
-                             const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x,
-                             double dt)
+bool Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::unstickDetection_left(
+    double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
+    const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x, double dt)
 {
   double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, dt, true);
   leftSupportForceAveragePtr_->input(Fn);
-  bool unstick = leftSupportForceAveragePtr_->output() < unstick_threshold;
-
-  if (unstick != last_unstick_l_)
-  {
-    if (!maybeChange_l_)
-    {
-      judge_time_counter_l_ = 0.0;
-      maybeChange_l_ = true;
-    }
-    else
-    {
-      judge_time_counter_l_ += dt;
-      if (judge_time_counter_l_ > 0.1)
-      {
-        last_unstick_l_ = unstick;
-      }
-    }
-  }
-  else
-  {
-    maybeChange_l_ = false;
-  }
-  return unstick;
+  return leftSupportForceAveragePtr_->output() < unstick_threshold;
 }
 
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
-bool Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::unstickDetection_right(double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
-                              const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x,
-                              double dt)
+bool Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::unstickDetection_right(
+    double F_leg, double Tp, double leg_len_spd, double leg_length, double acc_z,
+    const LqrModelParams& model_params, const Eigen::Matrix<double, STATE_DIM, 1>& x, double dt)
 {
   double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, dt, false);
   rightSupportForceAveragePtr_->input(Fn);
-  bool unstick = rightSupportForceAveragePtr_->output() < unstick_threshold;
-
-  if (unstick != last_unstick_r_)
-  {
-    if (!maybeChange_r_)
-    {
-      judge_time_counter_r_ = 0.0;
-      maybeChange_r_ = true;
-    }
-    else
-    {
-      judge_time_counter_r_ += dt;
-      if (judge_time_counter_r_ > 0.1)
-      {
-        last_unstick_r_ = unstick;
-      }
-    }
-  }
-  else
-  {
-    maybeChange_r_ = false;
-  }
-  return unstick;
+  return rightSupportForceAveragePtr_->output() < unstick_threshold;
 }
 
 // Explicit instantiation for the ROS controller's injected types.

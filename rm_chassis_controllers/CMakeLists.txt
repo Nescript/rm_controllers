@@ -136,6 +136,13 @@ install(
 ## Testing ##
 #############
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(bipedal_wheel_vmc_test
+          test/bipedal_wheel_vmc_test.cpp
+          src/bipedal_wheel/core/vmc/VMC.cpp
+  )
+endif()
+
 #if (${CATKIN_ENABLE_TESTING})
 #  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 #  ## Add gtest based cpp test target and link libraries

@@ -55,6 +55,13 @@ public:
   void setPid(control_toolbox::Pid* pid)
   { pid_ = pid; }
 
+  void reset()
+  {
+    if (pid_)
+      pid_->reset();
+    first_call_ = true;
+  }
+
 private:
   control_toolbox::Pid* pid_ = nullptr;
   bool first_call_ = true;
@@ -249,9 +256,9 @@ public:
   std::shared_ptr<bipedal_wheel_core::ChassisGeometryParams> chassis_geometry_params_;
   std::shared_ptr<bipedal_wheel_core::LegStateThresholdParams> leg_threshold_params_;
   double default_leg_length_ = 0.12;
-  bool five_link_ = false;  // true: standard five-bar, hip raw angle needs +M_PI instead of +M_PI_2
-  double knee_offset_ = -1.5707963267948966;  // added to raw knee handle to get VMC phi4 (fitted for linkage-driven legs)
-  double hip_offset_ = 0.0;  // added to raw hip handle to get VMC phi1; unset (<-100) -> five_link ? M_PI : M_PI_2
+  bool five_link_ = true;  // true: standard five-bar, hip raw angle needs +M_PI instead of +M_PI_2
+  double knee_offset_ = 0.0;  // added to raw knee handle to get VMC phi4 (0 for standard five-bar)
+  double hip_offset_ = 3.141592653589793;  // added to raw hip handle to get VMC phi1; unset (<-100) -> five_link ? M_PI : M_PI_2
 
   // TF cache for IMU <-> base_link static transform
   bool is_tf_cached_ = false;

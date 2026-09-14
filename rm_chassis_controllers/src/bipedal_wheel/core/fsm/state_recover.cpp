@@ -23,7 +23,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   const auto& chassis_state = ctx.sens_in.chassis_state;
 
   // Pitch and Theta vectors for left and right legs
-  double x_left_dtheta = left_spd.dTheta - chassis_state.angular_vel.y();
+  double x_left_dtheta = left_spd.dTheta + chassis_state.angular_vel.y();
   double x_right_d_pitch = chassis_state.angular_vel.y();
 
   if (!detectd_flag_ && std::abs(x_left_dtheta) < 0.2 && std::abs(x_right_d_pitch) < 0.2 &&
@@ -66,7 +66,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     {
       left_torque = ctx.pid_thetas[2]->computeCommand(leg_recovery_velocity_ - left_spd.dTheta, ctx.dt);
       right_torque = ctx.pid_thetas[3]->computeCommand(0.0 - right_spd.dTheta, ctx.dt);
-      left_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
+      left_leg_recovery_feed_forward_ = 3.0 * leg_recovery_velocity_;
       right_leg_recovery_feed_forward_ = 0.0;
       ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque, left_input);
       ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque, right_input);
@@ -76,7 +76,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
       left_torque = ctx.pid_thetas[2]->computeCommand(0.0 - left_spd.dTheta, ctx.dt);
       right_torque = ctx.pid_thetas[3]->computeCommand(leg_recovery_velocity_ - right_spd.dTheta, ctx.dt);
       left_leg_recovery_feed_forward_ = 0.0;
-      right_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
+      right_leg_recovery_feed_forward_ = 3.0 * leg_recovery_velocity_;
       ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque, left_input);
       ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque, right_input);
     }
@@ -88,7 +88,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
         detectLegRecoveryState(right_recovery_leg_, right_pos.theta, ctx.logger);
         left_torque = ctx.pid_thetas[2]->computeCommand(leg_recovery_velocity_ - left_spd.dTheta, ctx.dt);
         right_torque = ctx.pid_thetas[3]->computeCommand(0.0 - right_spd.dTheta, ctx.dt);
-        left_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
+        left_leg_recovery_feed_forward_ = 3.0 * leg_recovery_velocity_;
         right_leg_recovery_feed_forward_ = 0.0;
         ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque, left_input);
         ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque, right_input);
@@ -100,7 +100,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
         left_torque = ctx.pid_thetas[2]->computeCommand(0.0 - left_spd.dTheta, ctx.dt);
         right_torque = ctx.pid_thetas[3]->computeCommand(leg_recovery_velocity_ - right_spd.dTheta, ctx.dt);
         left_leg_recovery_feed_forward_ = 0.0;
-        right_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
+        right_leg_recovery_feed_forward_ = 3.0 * leg_recovery_velocity_;
         ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque, left_input);
         ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque, right_input);
       }
@@ -114,7 +114,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
           detectLegRecoveryState(right_recovery_leg_, right_pos.theta, ctx.logger);
           left_torque = ctx.pid_thetas[2]->computeCommand(leg_recovery_velocity_ - left_spd.dTheta, ctx.dt);
           right_torque = ctx.pid_thetas[3]->computeCommand(leg_recovery_velocity_ - right_spd.dTheta, ctx.dt);
-          left_leg_recovery_feed_forward_ = 2.0 * leg_recovery_velocity_;
+          left_leg_recovery_feed_forward_ = 3.0 * leg_recovery_velocity_;
           right_leg_recovery_feed_forward_ = left_leg_recovery_feed_forward_;
           ctx.left_vmc->leg_conv(left_force, left_leg_recovery_feed_forward_ + left_torque + T_theta_diff, left_input);
           ctx.right_vmc->leg_conv(right_force, right_leg_recovery_feed_forward_ + right_torque - T_theta_diff,

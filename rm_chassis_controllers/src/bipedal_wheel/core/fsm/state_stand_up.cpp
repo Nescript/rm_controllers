@@ -11,13 +11,26 @@ StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::StandUp()
 {
   ramp_length_des_l_ = std::make_shared<RampFilterType>(50.0, 0.001);
   ramp_length_des_r_ = std::make_shared<RampFilterType>(50.0, 0.001);
-  ramp_angle_des_l_ = std::make_shared<RampFilterType>(7.5, 0.001);
-  ramp_angle_des_r_ = std::make_shared<RampFilterType>(7.5, 0.001);
+  ramp_angle_des_l_ = std::make_shared<RampFilterType>(5.0, 0.001);
+  ramp_angle_des_r_ = std::make_shared<RampFilterType>(5.0, 0.001);
 }
 
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execute(FsmContext<PidType, LoggerType, RampFilterType, MovingAverageFilterType>& ctx)
 {
+  const auto& left_pos = ctx.left_vmc->getPos();
+  const auto& right_pos = ctx.right_vmc->getPos();
+  const auto& left_spd = ctx.left_vmc->getSpd();
+  const auto& right_spd = ctx.right_vmc->getSpd();
+
+  double pitch = ctx.sens_in.chassis_state.pitch;
+  double d_pitch = ctx.sens_in.chassis_state.angular_vel.y();
+
+  double left_theta_total = left_pos.theta + pitch;
+  double left_dtheta_total = left_spd.dTheta + d_pitch;
+  double right_theta_total = right_pos.theta + pitch;
+  double right_dtheta_total = right_spd.dTheta + d_pitch;
+
   if (!ctx.balance_state_changed)
   {
     ctx.logger.info("[balance] Enter STAND_UP");
@@ -25,16 +38,9 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     ctx.complete_stand = false;
     left_arrive_flag_ = right_arrive_flag_ = false;
 
-    // Obtain joint status state vector of left and right legs
-    // For index mappings: 0 is THETA. Let's build a dummy pitch/theta check
-    // Wait, we can pass double theta directly, or use getters.
-    // Since detectLegState takes theta from state vector (which is left_pos.theta / right_pos.theta), we can do:
-    detectLegState(ctx.left_vmc->getPos().theta, ctx.config.threshold, left_leg_orientation, ctx.logger);
-    detectLegState(ctx.right_vmc->getPos().theta, ctx.config.threshold, right_leg_orientation, ctx.logger);
+    detectLegState(left_theta_total, ctx.config.threshold, left_leg_orientation, ctx.logger);
+    detectLegState(right_theta_total, ctx.config.threshold, right_leg_orientation, ctx.logger);
   }
-
-  const auto& left_pos = ctx.left_vmc->getPos();
-  const auto& right_pos = ctx.right_vmc->getPos();
 
   double left_spring_force =
       -f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
@@ -45,11 +51,12 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   LegCommand right_cmd{};
 
   // setUpLegMotion takes inputs and outputs
-  setUpLegMotion(left_pos.theta, left_pos.L0, left_pos.theta, ctx.config.threshold, right_leg_orientation,
-                 left_leg_orientation, left_leg_command_, left_stop_, left_arrive_flag_, left_arrive_time_, ctx.dt);
-  setUpLegMotion(right_pos.theta, right_pos.L0, right_pos.theta, ctx.config.threshold, left_leg_orientation,
-                 right_leg_orientation, right_leg_command_, right_stop_, right_arrive_flag_, right_arrive_time_,
-                 ctx.dt);
+  setUpLegMotion(left_theta_total, left_dtheta_total, left_pos.L0, left_pos.theta, ctx.config.threshold,
+                 right_leg_orientation, left_leg_orientation, left_leg_command_, left_stop_,
+                 left_arrive_flag_, left_arrive_time_, ctx.dt);
+  setUpLegMotion(right_theta_total, right_dtheta_total, right_pos.L0, right_pos.theta, ctx.config.threshold,
+                 left_leg_orientation, right_leg_orientation, right_leg_command_, right_stop_,
+                 right_arrive_flag_, right_arrive_time_, ctx.dt);
 
   ramp_length_des_l_->input(left_leg_command_.desired_length);
   ramp_angle_des_l_->input(left_leg_command_.desired_angle);
@@ -86,7 +93,7 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     ctx.logger.info("[balance] Exit STAND_UP");
   }
 
-  if (ctx.cmd_in.overturn)
+  if (ctx.overturn)
   {
     ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
     ctx.balance_state_changed = false;
@@ -95,12 +102,12 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
 }
 
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
-void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setUpLegMotion(double theta, double leg_length, double leg_theta, const LegStateThresholdParams& threshold,
-                      const LegOrientation& other_leg_orientation, LegOrientation& leg_orientation,
-                      StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag, double& arrive_time_counter,
-                      double dt)
+void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setUpLegMotion(
+    double theta_total, double dtheta_total, double leg_length, double leg_theta,
+    const LegStateThresholdParams& threshold, const LegOrientation& other_leg_orientation,
+    LegOrientation& leg_orientation, StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag,
+    double& arrive_time_counter, double dt)
 {
-  (void)theta;
   switch (leg_orientation)
   {
     case LegOrientation::UNDER:
@@ -114,6 +121,8 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
       break;
     case LegOrientation::FRONT:
       stop_flag = false;
+      if (!arrive_flag)
+        arrive_flag = false;
       legCommand.desired_angle = M_PI_2 - 0.35;
       legCommand.desired_length = 0.34;
       legCommand.desired_angle_vel = 0.0;
@@ -123,10 +132,9 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
       {
         legCommand.desired_angle_vel = -1.5;
       }
-      // Instead of time-stamp differences, use a dt counter to avoid ROS dependency
-      if (std::abs(leg_theta) < 0.1)  // approximate pitch angular vel
+      if (std::abs(dtheta_total) < 0.1)
       {
-        if (leg_theta > 0 && leg_theta < M_PI_2 + 0.4)
+        if (theta_total > 0 && theta_total < M_PI_2 + 0.4)
         {
           legCommand.desired_angle_vel = -0.5;
           if (!arrive_flag)
@@ -214,7 +222,7 @@ LegCommand StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>
   Tp_leg_comp = G_leg * l_leg * std::sin(beta);
 
   double F_pid_force = length_pid.computeCommand(leg_command.desired_length - leg_pos.L0, dt);
-  F_pid_force = std::abs(F_pid_force) > 200 ? std::copysign(1, F_pid_force) * 200 : F_pid_force;
+  F_pid_force = std::abs(F_pid_force) > 100 ? std::copysign(1.0, F_pid_force) * 100 : F_pid_force;
   double force = F_pid_force + feedforward_force;
   double torque = 0.0;
   if (leg_orientation == LegOrientation::BEHIND || leg_orientation == LegOrientation::UNDER)

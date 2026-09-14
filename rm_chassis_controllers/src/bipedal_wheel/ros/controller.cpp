@@ -10,16 +10,23 @@
 
 namespace rm_chassis_controllers
 {
-bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh,
+bool BipedalController::init(hardware_interface::RobotHW* robot_hw, 
+                             ros::NodeHandle& root_nh,
                              ros::NodeHandle& controller_nh)
 {
-  ChassisBase<rm_control::RobotStateInterface, hardware_interface::ImuSensorInterface,
+  ChassisBase<rm_control::RobotStateInterface, 
+              hardware_interface::ImuSensorInterface,
               hardware_interface::EffortJointInterface>::init(robot_hw, root_nh, controller_nh);
 
   if (!initParams(controller_nh))
+  {
     return false;
+  }
 
-  initRosInterface(root_nh, controller_nh);
+  if (!initRosInterface(root_nh, controller_nh))
+  {
+    return false;
+  }
 
   if (!initHardwareHandles(robot_hw))
   {
@@ -239,6 +246,10 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   overturn_ = core_.getOverturn();
   balance_state_changed_ = core_.getBalanceStateChanged();
   recovery_leg_spd_turnback_ = core_.getRecoveryLegSpdTurnback();
+  if (ctrl_out.clear_jump_cmd)
+  {
+    jump_cmd_ = false;
+  }
 
   // 8. 将输出控制量应用给电机
   setJointCommands(joint_handles_, ctrl_out);
@@ -458,11 +469,11 @@ bool BipedalController::setupModelParams(ros::NodeHandle& controller_nh)
     return false;
   }
   controller_nh.param("l5", model_params_->l5, 0.0);
-  controller_nh.param("l3", model_params_->l3, 0.18);
-  controller_nh.param("l4", model_params_->l4, 0.08);
+  controller_nh.param("l3", model_params_->l3, model_params_->l2);
+  controller_nh.param("l4", model_params_->l4, model_params_->l1);
   controller_nh.param("five_link", model_params_->five_link, false);
   five_link_ = model_params_->five_link;
-  controller_nh.param("knee_offset", knee_offset_, -M_PI_2);
+  controller_nh.param("knee_offset", knee_offset_, five_link_ ? 0.0 : -M_PI_2);
   controller_nh.param("hip_offset", hip_offset_, -1000.0);
   if (hip_offset_ < -100.0)
     hip_offset_ = five_link_ ? M_PI : M_PI_2;
@@ -558,13 +569,22 @@ bool BipedalController::setupBiasParams(ros::NodeHandle& controller_nh)
   return true;
 }
 
-// [will unused]
 bool BipedalController::setupControlParams(ros::NodeHandle& controller_nh)
 {
-  if (!controller_nh.getParam("jumpOverTime", control_params_->jump_over_time))
+  const std::pair<const char*, double*> tbl[] = {
+    { "jumpOverTime", &control_params_->jump_over_time },
+    { "down5cmStairPitchThreshold", &control_params_->down5cmStairPitchThreshold },
+    { "down5cmStairThetaThreshold", &control_params_->down5cmStairThetaThreshold },
+    { "jump_up_force", &control_params_->jump_up_force },
+    { "off_ground_force", &control_params_->off_ground_force }
+  };
+  for (const auto& e : tbl)
   {
-    ROS_ERROR("Load param fail, check the resist of jumpOverTime");
-    return false;
+    if (!controller_nh.getParam(e.first, *e.second))
+    {
+      ROS_ERROR("Param %s not given (namespace: %s)", e.first, controller_nh.getNamespace().c_str());
+      return false;
+    }
   }
   return true;
 }

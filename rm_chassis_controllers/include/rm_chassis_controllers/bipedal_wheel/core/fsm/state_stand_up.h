@@ -22,7 +22,8 @@ public:
   void execute(FsmContext<PidType, LoggerType, RampFilterType, MovingAverageFilterType>& ctx);
 
 private:
-  void setUpLegMotion(double theta, double leg_length, double leg_theta, const LegStateThresholdParams& threshold,
+  void setUpLegMotion(double theta_total, double dtheta_total, double leg_length, double leg_theta,
+                      const LegStateThresholdParams& threshold,
                       const LegOrientation& other_leg_orientation, LegOrientation& leg_orientation,
                       StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag, double& arrive_time_counter,
                       double dt);

@@ -41,14 +41,7 @@ void SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   if (std::abs(ctx.sens_in.chassis_state.angular_vel.y()) < 0.1 && ctx.cmd_in.base_state != 3)
   {
     ctx.balance_state_changed = false;
-    if (ctx.overturn)
-    {
-      ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
-    }
-    else
-    {
-      ctx.current_physical_state = RobotPhysicalState::STAND;
-    }
+    ctx.current_physical_state = RobotPhysicalState::GETTING_UP;
     ctx.logger.info("[balance] Exit SIT_DOWN");
   }
 }

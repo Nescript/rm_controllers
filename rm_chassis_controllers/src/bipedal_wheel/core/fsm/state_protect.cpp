@@ -96,7 +96,7 @@ void Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     ctx.balance_state_changed = false;
     ctx.logger.info("[balance] Exit PROTECT");
   }
-  else if (std::abs(chassis_state.angular_vel.y()) < 0.1 && ctx.overturn && ctx.cmd_in.base_state != 3)  // FALLEN = 3
+  else if (ctx.overturn && ctx.cmd_in.base_state != 3)  // FALLEN = 3
   {
     ctx.current_physical_state = RobotPhysicalState::GETTING_UP;  // GETTING_UP maps to Recover
     ctx.balance_state_changed = false;

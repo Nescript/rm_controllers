@@ -17,8 +17,9 @@ void Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exe
     ctx.logger.info("[balance] Enter Upstairs");
     ctx.balance_state_changed = true;
     ctx.complete_stand = false;
-    detectLegState(left_pos.theta, ctx.config.threshold, left_leg_orientation, ctx.logger);
-    detectLegState(right_pos.theta, ctx.config.threshold, right_leg_orientation, ctx.logger);
+    double pitch = ctx.sens_in.chassis_state.pitch;
+    detectLegState(left_pos.theta + pitch, ctx.config.threshold, left_leg_orientation, ctx.logger);
+    detectLegState(right_pos.theta + pitch, ctx.config.threshold, right_leg_orientation, ctx.logger);
   }
 
   double left_spring_force =

@@ -92,7 +92,7 @@ struct LqrModelParams
   double l3 = 0.0;         // Five-bar connecting rod length (m, drive tip -> wheel axle)
   double l4 = 0.0;         // Five-bar drive link length (m)
   double l5 = 0.0;         // Distance offset / virtual offset (m)
-  bool five_link = false;  // true: standard five-bar, both leg motors at the base
+  bool five_link = true;   // true: standard five-bar, both leg motors at the base
 };
 
 struct ChassisGeometryParams
@@ -112,6 +112,10 @@ struct SpringParams
 struct ControlParams
 {
   double jump_over_time = 0.0;
+  double down5cmStairPitchThreshold = 0.1;
+  double down5cmStairThetaThreshold = 0.2;
+  double jump_up_force = 210.0;
+  double off_ground_force = 90.0;
 };
 
 struct BiasParams
@@ -242,6 +246,7 @@ struct DebugData
 struct ControlOutput
 {
   LegCommand leg_cmd[2]{};
+  bool clear_jump_cmd = false;
   // DebugData debug_data{};
 };
 

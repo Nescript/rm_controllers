@@ -28,8 +28,9 @@ struct LegForce
 class VMC
 {
 public:
-  explicit VMC(double l1, double l2, double l5 = 0) : l1_(l1), l2_(l2), l3_(l2), l4_(l1), l5_(l5) {};
-  explicit VMC(double l1, double l2, double l3, double l4, double l5, bool five_link)
+  explicit VMC(double l1, double l2, double l5 = 0, bool five_link = false)
+      : l1_(l1), l2_(l2), l3_(l2), l4_(l1), l5_(l5), five_link_(five_link) {};
+  explicit VMC(double l1, double l2, double l3, double l4, double l5, bool five_link = true)
       : l1_(l1), l2_(l2), l3_(l3), l4_(l4), l5_(l5), five_link_(five_link) {};
   ~VMC() = default;
 
@@ -39,8 +40,8 @@ public:
    * This function computes the forward kinematics to find the end-effector position
    * in polar coordinates (length L0 and angle theta) and updates the internal position state.
    *
-   * @param phi1 The first joint angle (e.g., hip/thigh joint).
-   * @param phi4 The second joint angle (e.g., knee/calf joint), possibly relative or absolute depending on mechanism.
+   * @param phi1 Hip angle in the VMC plane (real five-bar: joint position + pi).
+   * @param phi4 Absolute second motor angle for five-bar; relative knee angle for serial legs.
    */
   void leg_pos(double phi1, double phi4);
 
@@ -109,27 +110,14 @@ public:
   { return force_real_; }
 
 private:
-  /**
-   * @brief Calculate the Jacobian matrix of the leg mechanism.
-   *
-   * The Jacobian J relates joint velocities to end-effector velocities:
-   * [v_L; v_phi] = J * [dphi1; dphi4]
-   *
-   * @param phi1 Current position of the first joint.
-   * @param phi4 Current position of the second joint.
-   * @param J    Output 2x2 Jacobian matrix.
-   */
-  void calc_jacobian(double phi1, double phi4, double J[2][2]);
-
-  double J_[2][2];
-  double phi1_, phi4_;
-  double dphi1_, dphi4_;
-  LegPos pos_;
-  LegSpd spd_;
-  LegForce force_real_;
+  double J_[2][2]{};
+  LegPos pos_{};
+  LegSpd spd_{};
+  LegForce force_real_{};
+  bool speed_initialized_ = false;
 
   double l1_, l2_, l3_, l4_, l5_;
-  bool five_link_ = false;  // true: standard five-bar (both motors at base), false: serial 2-link
+  bool five_link_ = true;  // true: standard five-bar (both motors at base), false: serial 2-link
 };
 using VMCPtr = std::shared_ptr<VMC>;
 }  // namespace bipedal_wheel_core
