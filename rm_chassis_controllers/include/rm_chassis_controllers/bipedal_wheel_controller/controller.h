@@ -39,6 +39,7 @@
 #include "bipedal_wheel_controller/controller_interface.h"
 
 #include "bipedal_wheel_controller/powerID.h"
+#include "bipedal_wheel_controller/power_fit_logger.h"
 
 namespace rm_chassis_controllers
 {
@@ -56,6 +57,7 @@ class BipedalController : public ChassisBase<rm_control::RobotStateInterface, ha
 {
 public:
   BipedalController() = default;
+  ~BipedalController() override;
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh) override;
   void moveJoint(const ros::Time& time, const ros::Duration& period) override;
   void stopping(const ros::Time& time) override;
@@ -180,7 +182,28 @@ private:
 
   // Power model online identification (RLS)
   PowerModel power_model_;
-  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>> power_model_pub_;
+  ros::Publisher power_fit_pub_;
+  ros::Publisher power_prediction_pub_;
+  std::unique_ptr<PowerFitLogger> power_fit_logger_;
+  std::string power_session_id_;
+  uint64_t power_model_version_ = 0;
+  ros::Time power_last_solve_stamp_, power_stats_stamp_;
+  ros::WallTime power_last_publish_;
+  double power_metrics_rate_ = 1.0;
+  double power_filter_time_constant_ = 0.02, power_measurement_delay_ = 0.0, power_max_alignment_error_ = 0.05;
+  double power_stationary_sample_period_ = 0.2;
+  double power_min_measurement_ = 0.0, power_max_measurement_ = 500.0;
+  double power_min_normalized_eigenvalue_ = 1e-6, power_min_r2_ = 0.5, power_max_rmse_ = 20.0;
+  uint64_t power_min_samples_ = 500;
+  bool power_identification_enabled_ = true, power_require_normal_state_ = true;
+  bool power_reject_protected_samples_ = true, power_last_solve_success_ = false;
+  bool power_last_model_accepted_ = false, accepted_power_model_valid_ = false;
+  double filtered_power_acceleration_ = 0.0, filtered_power_angular_acceleration_ = 0.0;
+  bool power_filter_initialized_ = false;
+  ros::Time power_last_stationary_sample_;
+  void publishPowerFit();
+  void publishPowerCoefficients();
+  ros::Publisher power_model_pub_;
   realtime_tools::RealtimeBuffer<Eigen::Matrix<double, 12, 1>> power_coeffs_rt_buffer_;
 
   // 与裁判系统功率对齐用的状态环形缓冲（RT 线程写入，referee 回调线程读取）
@@ -188,10 +211,18 @@ private:
   {
     ros::Time stamp;
     double v{}, omega{}, a{}, alpha{};
+    bool eligible{ false };
+  };
+  struct PowerSampleSlot
+  {
+    std::atomic<uint64_t> sequence{ 0 }, stamp_ns{ 0 };
+    std::atomic<double> v{ 0.0 }, omega{ 0.0 }, a{ 0.0 }, alpha{ 0.0 };
+    std::atomic_bool eligible{ false };
   };
   static constexpr int POWER_BUFFER_SIZE = 500;  // 1kHz 下覆盖 500ms
-  std::array<PowerSample, POWER_BUFFER_SIZE> power_buffer_{};
+  std::array<PowerSampleSlot, POWER_BUFFER_SIZE> power_buffer_{};
   std::atomic<int> power_buffer_head_{ 0 };
+  bool readPowerSample(int index, PowerSample& sample) const;
   std::atomic<double> chassis_power_meas_{ 0.0 };  // 最新底盘功率（W）
   std::atomic<double> chassis_power_stamp_{ 0.0 };
   double last_yaw_rate_{ 0.0 };  // 上周期偏航角速度，用于差分求角加速度

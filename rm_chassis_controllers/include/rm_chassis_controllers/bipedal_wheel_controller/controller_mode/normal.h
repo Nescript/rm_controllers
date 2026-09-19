@@ -11,6 +11,7 @@
 
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
 #include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/jump_contact_detector.h"
 
 namespace rm_chassis_controllers
 {
@@ -34,19 +35,29 @@ private:
     NEGATIVE = 1
   } VEL_DIRECTION;
 
-  double calculateSupportForce(double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
+  struct SupportForceHistory
+  {
+    bool initialized{ false };
+    double ddot_zM{ 0.0 }, dot_theta{ 0.0 }, ddot_theta{ 0.0 }, ddot_leg_len{ 0.0 };
+    double leg_len_spd[3]{};
+  };
+
+  double calculateSupportForce(int leg, double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
                                Eigen::Matrix<double, STATE_DIM, 1> x, const std::shared_ptr<ModelParams>& model_params,
                                const ros::Duration& period);
-  bool unstickDetection(const double& F_leg, const double& Tp, const double& leg_len_spd, const double& leg_length,
+  bool unstickDetection(int leg, const double& F_leg, const double& Tp, const double& leg_len_spd, const double& leg_length,
                         const double& acc_z, const std::shared_ptr<ModelParams>& model_params,
                         Eigen::Matrix<double, STATE_DIM, 1> x,
                         const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr,
                         const ros::Duration& period);
+  bool is_phase_switch_;
   std::vector<hardware_interface::JointHandle*> joint_handles_;
   std::vector<control_toolbox::Pid*> pid_legs_;
   control_toolbox::Pid *pid_yaw_vel_, *pid_theta_diff_, *pid_roll_, *pid_wheel_vel_diff_;
   ros::Time lastJumpTime_{};
   ros::Time off_ground_start_time_{};
+  JumpContactDetector jump_contact_detector_;
+  SupportForceHistory support_force_history_[2];
 
   double pos_des_{ 0.0 }, leg_length_des{ 0.2 };
   double unstick_threshold{ 15.0 };

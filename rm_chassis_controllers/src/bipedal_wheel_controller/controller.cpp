@@ -5,6 +5,8 @@
 #include "bipedal_wheel_controller/controller.h"
 
 #include <angles/angles.h>
+#include <boost/filesystem.hpp>
+#include <cstdlib>
 #include <geometry_msgs/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
@@ -13,6 +15,12 @@
 
 namespace rm_chassis_controllers
 {
+BipedalController::~BipedalController()
+{
+  power_status_sub_.shutdown();
+  power_fit_logger_.reset();
+}
+
 bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh,
                              ros::NodeHandle& controller_nh)
 {
@@ -88,14 +96,83 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   double power_lambda = 0.999, power_alpha_ridge = 0.001;
   controller_nh.param("power_model/lambda", power_lambda, power_lambda);
   controller_nh.param("power_model/alpha_ridge", power_alpha_ridge, power_alpha_ridge);
+  controller_nh.param("power_model/identification_enabled", power_identification_enabled_,
+                      power_identification_enabled_);
+  controller_nh.param("power_model/require_normal_state", power_require_normal_state_, power_require_normal_state_);
+  controller_nh.param("power_model/reject_protected_samples", power_reject_protected_samples_,
+                      power_reject_protected_samples_);
+  controller_nh.param("power_model/filter_time_constant", power_filter_time_constant_, power_filter_time_constant_);
+  controller_nh.param("power_model/measurement_delay", power_measurement_delay_, power_measurement_delay_);
+  controller_nh.param("power_model/max_alignment_error", power_max_alignment_error_, power_max_alignment_error_);
+  controller_nh.param("power_model/stationary_sample_period", power_stationary_sample_period_,
+                      power_stationary_sample_period_);
+  controller_nh.param("power_model/min_measurement", power_min_measurement_, power_min_measurement_);
+  controller_nh.param("power_model/max_measurement", power_max_measurement_, power_max_measurement_);
+  int minimum_samples = static_cast<int>(power_min_samples_);
+  controller_nh.param("power_model/minimum_samples", minimum_samples, minimum_samples);
+  power_min_samples_ = static_cast<uint64_t>(std::max(0, minimum_samples));
+  controller_nh.param("power_model/min_normalized_eigenvalue", power_min_normalized_eigenvalue_,
+                      power_min_normalized_eigenvalue_);
+  controller_nh.param("power_model/min_r2", power_min_r2_, power_min_r2_);
+  controller_nh.param("power_model/max_rmse", power_max_rmse_, power_max_rmse_);
   power_model_.init(power_lambda, power_alpha_ridge);
   Eigen::Matrix<double, 12, 1> init_c;
   init_c.setZero();
   power_coeffs_rt_buffer_.initRT(init_c);
+  controller_nh.param("power_model/metrics_rate", power_metrics_rate_, 1.0);
+  if (!std::isfinite(power_metrics_rate_) || power_metrics_rate_ <= 0.0 ||
+      !std::isfinite(power_lambda) || power_lambda <= 0 || power_lambda > 1 ||
+      !std::isfinite(power_alpha_ridge) || power_alpha_ridge < 0 || power_min_samples_ < 13 ||
+      !std::isfinite(power_filter_time_constant_) || power_filter_time_constant_ < 0.0 ||
+      !std::isfinite(power_measurement_delay_) || power_measurement_delay_ < 0.0 ||
+      !std::isfinite(power_max_alignment_error_) || power_max_alignment_error_ <= 0.0 ||
+      !std::isfinite(power_stationary_sample_period_) || power_stationary_sample_period_ <= 0.0 ||
+      !std::isfinite(power_min_measurement_) || !std::isfinite(power_max_measurement_) ||
+      power_min_measurement_ < 0.0 || power_max_measurement_ <= power_min_measurement_ ||
+      !std::isfinite(power_min_normalized_eigenvalue_) || power_min_normalized_eigenvalue_ < 0.0 ||
+      !std::isfinite(power_min_r2_) || !std::isfinite(power_max_rmse_) || power_max_rmse_ <= 0.0)
+  {
+    ROS_ERROR("[PowerID] Invalid online identification parameters");
+    return false;
+  }
+  power_session_id_ = std::to_string(ros::WallTime::now().toNSec()) + "-" +
+      boost::filesystem::unique_path("%%%%%%%%").string();
+  bool log_enabled;
+  controller_nh.param("power_model/log_enabled", log_enabled, true);
+  const char* log_dir = std::getenv("ROS_LOG_DIR");
+  const char* ros_home = std::getenv("ROS_HOME");
+  const char* user_home = std::getenv("HOME");
+  std::string directory = log_dir ? log_dir :
+      (std::string(ros_home ? ros_home : (user_home ? user_home : "/tmp")) +
+       (ros_home ? "/log" : "/.ros/log"));
+  directory += "/power_model";
+  controller_nh.param("power_model/log_directory", directory, directory);
+  if (log_enabled)
+    power_fit_logger_.reset(new PowerFitLogger(directory, power_session_id_));
+  power_prediction_pub_ = root_nh.advertise<std_msgs::Float64>("/power_model/predicted_power", 10);
+  power_fit_pub_ = root_nh.advertise<rm_msgs::PowerModelFit>("/power_model/fit_metrics", 1, true);
+  power_model_pub_ = root_nh.advertise<std_msgs::Float64MultiArray>("/power_model/c", 1, true);
+  std::vector<double> initial_coefficients;
+  if (controller_nh.getParam("power_model/initial_coefficients", initial_coefficients))
+  {
+    if (initial_coefficients.size() != 12)
+    {
+      ROS_ERROR("[PowerID] initial_coefficients must contain exactly 12 values");
+      return false;
+    }
+    for (int i = 0; i < init_c.rows(); ++i)
+      init_c(i) = initial_coefficients[i];
+    if (!power_model_.setC(init_c))
+    {
+      ROS_ERROR("[PowerID] initial_coefficients must be finite and non-negative");
+      return false;
+    }
+    power_coeffs_rt_buffer_.writeFromNonRT(init_c);
+    accepted_power_model_valid_ = true;
+    publishPowerCoefficients();
+  }
   power_status_sub_ = root_nh.subscribe<rm_msgs::PowerManagementSampleAndStatusData>(
       "/rm_referee/power_management/sample_and_status", 10, &BipedalController::onPowerMeas, this);
-  power_model_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(
-      root_nh, "/power_model/c", 1));
 
   debugPub_ = std::make_shared<DebugDataPublisher>(controller_nh, "debug_data");
   return true;
@@ -126,7 +203,8 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     mode_manager_->switchMode(RECOVER);
   }
   updateEstimation(time, period);
-  updatePowerModel(time, period);
+  if (power_identification_enabled_)
+    updatePowerModel(time, period);
   mode_manager_->getModeImpl()->execute(time, period);
   pubState();
 }
@@ -311,32 +389,98 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
 void BipedalController::updatePowerModel(const ros::Time& time, const ros::Duration& period)
 {
   const double dt = period.toSec();
+  if (!std::isfinite(dt) || dt <= 0.0)
+    return;
   const double v = chassis_state_.x_vel;
   const double omega = chassis_state_.angular_vel.z;
   // a 直接用 IMU base 系加速度，比速度差分噪声低一个量级
-  const double a = chassis_state_.linear_acc.x;
+  const double raw_acceleration = chassis_state_.linear_acc.x;
   // alpha 没有直读来源，对角速度差分
-  const double alpha = dt > 0.0 && !last_power_update_time_.isZero() ? (omega - last_yaw_rate_) / dt : 0.0;
+  const double raw_angular_acceleration =
+      !last_power_update_time_.isZero() ? (omega - last_yaw_rate_) / dt : 0.0;
 
   last_yaw_rate_ = omega;
   last_power_update_time_ = time;
+
+  if (!std::isfinite(v) || !std::isfinite(omega) || !std::isfinite(raw_acceleration) ||
+      !std::isfinite(raw_angular_acceleration))
+    return;
+  const double filter_gain = power_filter_time_constant_ <= 0.0 ?
+                                 1.0 :
+                                 std::min(1.0, dt / (power_filter_time_constant_ + dt));
+  if (!power_filter_initialized_)
+  {
+    filtered_power_acceleration_ = raw_acceleration;
+    filtered_power_angular_acceleration_ = raw_angular_acceleration;
+    power_filter_initialized_ = true;
+  }
+  else
+  {
+    filtered_power_acceleration_ += filter_gain * (raw_acceleration - filtered_power_acceleration_);
+    filtered_power_angular_acceleration_ +=
+        filter_gain * (raw_angular_acceleration - filtered_power_angular_acceleration_);
+  }
 
   // 仅在实时线程中将运动状态写入环形缓冲，剥离矩阵求解与跨线程竞争
   PowerSample s;
   s.stamp = time;
   s.v = v;
   s.omega = omega;
-  s.a = a;
-  s.alpha = alpha;
+  s.a = filtered_power_acceleration_;
+  s.alpha = filtered_power_angular_acceleration_;
+  s.eligible = !power_require_normal_state_ ||
+      (balance_mode_ == BalanceMode::NORMAL && complete_stand_ && !overturn_ && !slip_flag_ && !jumpCmd_ &&
+       state_ == rm_msgs::ChassisCmd::FOLLOW);
   const int head = power_buffer_head_.load(std::memory_order_relaxed);
-  power_buffer_[head] = s;
+  auto& slot = power_buffer_[head];
+  const uint64_t sequence = slot.sequence.load(std::memory_order_relaxed);
+  slot.sequence.store(sequence + 1, std::memory_order_release);
+  slot.stamp_ns.store(s.stamp.toNSec(), std::memory_order_relaxed);
+  slot.v.store(s.v, std::memory_order_relaxed);
+  slot.omega.store(s.omega, std::memory_order_relaxed);
+  slot.a.store(s.a, std::memory_order_relaxed);
+  slot.alpha.store(s.alpha, std::memory_order_relaxed);
+  slot.eligible.store(s.eligible, std::memory_order_relaxed);
+  slot.sequence.store(sequence + 2, std::memory_order_release);
   power_buffer_head_.store((head + 1) % POWER_BUFFER_SIZE, std::memory_order_release);
+}
+
+bool BipedalController::readPowerSample(int index, PowerSample& sample) const
+{
+  const auto& slot = power_buffer_[index];
+  for (int attempt = 0; attempt < 3; ++attempt)
+  {
+    const uint64_t before = slot.sequence.load(std::memory_order_acquire);
+    if (before & 1U)
+      continue;
+    const uint64_t stamp_ns = slot.stamp_ns.load(std::memory_order_relaxed);
+    sample.stamp.fromNSec(stamp_ns);
+    sample.v = slot.v.load(std::memory_order_relaxed);
+    sample.omega = slot.omega.load(std::memory_order_relaxed);
+    sample.a = slot.a.load(std::memory_order_relaxed);
+    sample.alpha = slot.alpha.load(std::memory_order_relaxed);
+    sample.eligible = slot.eligible.load(std::memory_order_relaxed);
+    const uint64_t after = slot.sequence.load(std::memory_order_acquire);
+    if (before == after && !(after & 1U))
+      return stamp_ns != 0;
+  }
+  return false;
 }
 
 void BipedalController::onPowerMeas(const rm_msgs::PowerManagementSampleAndStatusData::ConstPtr& msg)
 {
+  if (!std::isfinite(msg->chassis_power) || msg->stamp.isZero() || msg->chassis_power < power_min_measurement_ ||
+      msg->chassis_power > power_max_measurement_ ||
+      (power_reject_protected_samples_ && msg->power_management_protection_info != 0))
+    return;
+  if (!power_identification_enabled_)
+  {
+    publishPowerFit();
+    return;
+  }
   chassis_power_meas_.store(msg->chassis_power, std::memory_order_relaxed);
   chassis_power_stamp_.store(msg->stamp.toSec(), std::memory_order_relaxed);
+  const ros::Time measurement_time = msg->stamp - ros::Duration(power_measurement_delay_);
 
   // 在环形缓冲中找与功率时间戳最近的状态样本，对齐后喂给辨识器
   const int head = power_buffer_head_.load(std::memory_order_acquire);
@@ -346,10 +490,10 @@ void BipedalController::onPowerMeas(const rm_msgs::PowerManagementSampleAndStatu
 
   for (int i = 0; i < POWER_BUFFER_SIZE; ++i)
   {
-    const PowerSample& s = power_buffer_[(head - 1 - i + POWER_BUFFER_SIZE) % POWER_BUFFER_SIZE];
-    if (s.stamp.isZero())
+    PowerSample s;
+    if (!readPowerSample((head - 1 - i + POWER_BUFFER_SIZE) % POWER_BUFFER_SIZE, s))
       break;  // 尚未写满
-    const double d = std::abs((s.stamp - msg->stamp).toSec());
+    const double d = std::abs((s.stamp - measurement_time).toSec());
     if (d < best_dt)
     {
       best_dt = d;
@@ -360,32 +504,113 @@ void BipedalController::onPowerMeas(const rm_msgs::PowerManagementSampleAndStatu
       break;  // 时间戳单调，越往前差越大
   }
 
-  // 对齐误差在 50ms 以内认为有效
-  if (found && best_dt < 0.05)
+  // 仅接受与延迟补偿后的功率测量足够接近的控制样本。
+  if (found && best_dt < power_max_alignment_error_ && best_sample.eligible)
   {
-    // 持续激励（PE）判定：在静止死区内不更新递归统计量，防止协方差风暴（Covariance Windup）
-    if (power_model_.isExcited(best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha))
+    // Predict before fitting this measurement; also publish in the stationary dead zone.
+    const double predicted_power = power_model_.predict(best_sample.v, best_sample.omega,
+                                                         best_sample.a, best_sample.alpha);
+    if (std::isfinite(predicted_power))
     {
-      power_model_.updateD(0, best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha, msg->chassis_power);
-
-      // 在非实时回调线程中执行正规方程求解与物理合理性校验
-      if (power_model_.solve())
+      std_msgs::Float64 prediction;
+      prediction.data = predicted_power;
+      power_prediction_pub_.publish(prediction);
+    }
+    // 运动样本正常更新；静止样本降频保留，用于约束静态功率 c0。
+    const bool excited = power_model_.isExcited(best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha);
+    const bool stationary_sample_due = !excited &&
+        (power_last_stationary_sample_.isZero() ||
+         msg->stamp - power_last_stationary_sample_ >= ros::Duration(power_stationary_sample_period_));
+    if (excited || stationary_sample_due)
+    {
+      if (!power_model_.updateD(0, best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha,
+                               msg->chassis_power))
       {
-        const auto& c = power_model_.getC();
-        power_coeffs_rt_buffer_.writeFromNonRT(c);
+        publishPowerFit();
+        return;
+      }
+      power_stats_stamp_ = msg->stamp;
+      if (stationary_sample_due)
+        power_last_stationary_sample_ = msg->stamp;
 
-        if (power_model_pub_->trylock())
+      if (!power_model_.hasSufficientExcitation(power_min_samples_, power_min_normalized_eigenvalue_))
+      {
+        publishPowerFit();
+        return;
+      }
+
+      // 在非实时回调线程中执行求解，并只发布达到拟合质量门槛的模型。
+      const bool previous_model_valid = power_model_.isModelValid();
+      const auto previous_coefficients = power_model_.getC();
+      power_last_solve_success_ = power_model_.solve(power_min_samples_);
+      power_last_model_accepted_ = false;
+      if (power_last_solve_success_)
+      {
+        power_last_solve_stamp_ = msg->stamp;
+        const auto candidate_fit = power_model_.evaluate();
+        if (candidate_fit.metrics_valid && candidate_fit.r2_valid && candidate_fit.r2 >= power_min_r2_ &&
+            candidate_fit.rmse <= power_max_rmse_)
         {
-          power_model_pub_->msg_.data.assign(c.data(), c.data() + 12);
-          power_model_pub_->unlockAndPublish();
+          power_last_model_accepted_ = true;
+          accepted_power_model_valid_ = true;
+          ++power_model_version_;
+          power_coeffs_rt_buffer_.writeFromNonRT(power_model_.getC());
+          publishPowerCoefficients();
         }
+        else if (previous_model_valid)
+          power_model_.setC(previous_coefficients);
+        else
+          power_model_.invalidateModel();
       }
       else
       {
-        ROS_WARN_THROTTLE(2.0, "[PowerID] 求解失败或系数未通过物理合理性校验，保留上一稳定解");
+        ROS_WARN_THROTTLE(2.0, "[PowerID] Solve failed, keeping the previous stable solution");
       }
     }
   }
+  publishPowerFit();
+}
+
+void BipedalController::publishPowerFit()
+{
+  const auto now = ros::WallTime::now();
+  if (!power_last_publish_.isZero() && (now - power_last_publish_).toSec() < 1.0 / power_metrics_rate_)
+    return;
+  power_last_publish_ = now;
+  const auto fit = power_model_.evaluate();
+  rm_msgs::PowerModelFit snapshot;
+  snapshot.header.stamp = power_stats_stamp_;
+  snapshot.session_id = power_session_id_;
+  snapshot.model_version = power_model_version_;
+  snapshot.last_solve_stamp = power_last_solve_stamp_;
+  snapshot.sample_count = fit.sample_count;
+  snapshot.model_valid = fit.model_valid;
+  snapshot.metrics_valid = fit.metrics_valid;
+  snapshot.r2_valid = fit.r2_valid;
+  snapshot.last_solve_success = power_last_solve_success_;
+  snapshot.model_accepted = power_last_model_accepted_;
+  snapshot.lambda = power_model_.getLambda();
+  snapshot.alpha_ridge = power_model_.getAlphaRidge();
+  snapshot.rmse = fit.rmse;
+  snapshot.r2 = fit.r2;
+  snapshot.bias = fit.bias;
+  const auto& c = power_model_.getC();
+  std::copy(c.data(), c.data() + 12, snapshot.c.begin());
+  power_fit_pub_.publish(snapshot);
+  if (accepted_power_model_valid_)
+    publishPowerCoefficients();
+  if (power_fit_logger_)
+    power_fit_logger_->enqueue(snapshot);
+}
+
+void BipedalController::publishPowerCoefficients()
+{
+  if (!accepted_power_model_valid_)
+    return;
+  const auto& coefficients = *power_coeffs_rt_buffer_.readFromNonRT();
+  std_msgs::Float64MultiArray message;
+  message.data.assign(coefficients.data(), coefficients.data() + coefficients.rows());
+  power_model_pub_.publish(message);
 }
 
 void BipedalController::pubState()

@@ -88,7 +88,7 @@ struct LegCommand
   double input[2];  // input
 };
 
-enum LegOrientation
+enum LegOrientation : std::uint8_t
 {
   UNDER,
   FRONT,
@@ -103,7 +103,7 @@ enum JumpPhase : std::uint8_t
   IDLE,
 };
 
-enum BalanceMode
+enum BalanceMode : std::uint8_t
 {
   NORMAL,
   STAND_UP,
@@ -113,19 +113,19 @@ enum BalanceMode
   PROTECT
 };
 
-enum Side
+enum Side : std::uint8_t
 {
   LEFT = 0,
   RIGHT,
 };
 
-enum
+enum : std::uint8_t
 {
   WHEEL_T = 0,
   LEG_Tp,
 };
 
-enum
+enum : std::uint8_t
 {
   THETA = 0,
   D_THETA,
@@ -138,7 +138,7 @@ enum
 struct LegState
 {
   Eigen::Matrix<double, STATE_DIM, 1> x;  // LQR状态量
-  double angle[2];                        // [0]: hip, [1]: knee
+  double angle[2];            // [0]: hip, [1]: knee
   VMCPtr vmc{ nullptr };
   bool unstick = false;
 };

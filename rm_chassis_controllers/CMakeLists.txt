@@ -13,6 +13,7 @@ add_definitions(-Wall -Werror -Wno-enum-compare)
 find_package(catkin REQUIRED
         COMPONENTS
         roscpp
+        rm_msgs
 
         rm_common
 
@@ -25,6 +26,8 @@ find_package(catkin REQUIRED
 )
 
 find_package(Eigen3 REQUIRED)
+find_package(Boost REQUIRED COMPONENTS filesystem system)
+find_package(Threads REQUIRED)
 
 generate_dynamic_reconfigure_options(
   cfg/LQRWeight.cfg
@@ -47,6 +50,7 @@ catkin_package(
         LIBRARIES
         CATKIN_DEPENDS
         roscpp
+        rm_msgs
 
         rm_common
 
@@ -88,9 +92,11 @@ add_library(${PROJECT_NAME}
 ## Specify libraries to link executable targets against
 target_link_libraries(${PROJECT_NAME}
         ${catkin_LIBRARIES}
+        ${Boost_LIBRARIES}
+        Threads::Threads
 )
 
-add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg)
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGETS})
 
 #############
 ## Install ##
@@ -133,3 +139,15 @@ install(
 #      test/AlgorithmTest.cpp)
 #  target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME}_core)
 #endif ()
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(jump_contact_detector_test test/jump_contact_detector_test.cpp)
+  catkin_add_gtest(power_fit_logger_test test/power_fit_logger_test.cpp
+      src/bipedal_wheel_controller/power_fit_logger.cpp)
+  if(TARGET power_fit_logger_test)
+    target_link_libraries(power_fit_logger_test ${catkin_LIBRARIES} ${Boost_LIBRARIES} Threads::Threads)
+    add_dependencies(power_fit_logger_test ${catkin_EXPORTED_TARGETS})
+  endif()
+  catkin_add_gtest(power_fit_test test/power_fit_test.cpp
+      src/bipedal_wheel_controller/powerID.cpp)
+endif()

@@ -141,9 +141,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     }
     if (jump_phase_ == JumpPhase::LEG_RETRACTION)
     {
-      // x(THETA) = leg_pos.theta + chassis_pitch is the leg angle in the world frame. A zero world-frame
-      // reference makes leg_pos.theta_des = -chassis_pitch, i.e. body inclination + leg swing angle = pi/2.
-      // Compensate the normal leg-angle bias so that the physical reference remains exactly zero.
       x_left_ref(THETA) = x_right_ref(THETA) = -bias_params_->theta;
     }
     x_left_ref(POS) = x_right_ref(POS) = pos_des_;
@@ -220,6 +217,7 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
       time - lastJumpTime_ > ros::Duration(control_params_->jumpOverTime_) && controller->getJumpCmd())
   {
     jump_phase_ = JumpPhase::LEG_RETRACTION;
+    is_phase_switch_ = true;
     jumpTime_ = 0;
     jump_contact_detector_.reset();
     ROS_INFO("[balance] Jump start");
@@ -252,7 +250,11 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     {
       case JumpPhase::LEG_RETRACTION:
       {
-        ROS_INFO("[balance] ENTER LEG_RETRACTION");
+        if (is_phase_switch_)
+        {
+          ROS_INFO("[balance] ENTER LEG_RETRACTION");
+          is_phase_switch_ = false;
+        }
         F_leg(LEFT) = pid_legs_[LEFT]->computeCommand((leg_length_des - 0.02f) - current_leg_length, period) +
                       gravity / cos(left_pos.theta) + F_roll - left_spring_force;
         F_leg(RIGHT) = pid_legs_[RIGHT]->computeCommand((leg_length_des - 0.02f) - current_leg_length, period) +
@@ -381,7 +383,7 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     ROS_INFO("[balance] Exit NORMAL");
   }
 
-  if (leg_length_des < 0.22)
+  if (jump_phase_ == JumpPhase::IDLE && leg_length_des < 0.22)
   {
     // Protection
     if ((abs(x_left(0)) > 0.6f || abs(x_right(0)) > 0.6f || abs(chassis_state.pitch) > 0.4 ||
