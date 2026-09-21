@@ -158,8 +158,10 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   clamp(x_left(THETA), -0.6f, 0.6f);
   clamp(x_right(THETA), -0.6f, 0.6f);
 
-  const bool left_mpc_solved = controller->solveMpc(-x_left, Matrix<double, STATE_DIM, 1>::Zero(), u_left);
-  const bool right_mpc_solved = controller->solveMpc(-x_right, Matrix<double, STATE_DIM, 1>::Zero(), u_right);
+  const bool left_mpc_solved =
+      controller->solveMpc(LEFT, left_pos.L0, -x_left, Matrix<double, STATE_DIM, 1>::Zero(), u_left);
+  const bool right_mpc_solved =
+      controller->solveMpc(RIGHT, right_pos.L0, -x_right, Matrix<double, STATE_DIM, 1>::Zero(), u_right);
   if (!left_mpc_solved)
     u_left = k_left * (-x_left);
   if (!right_mpc_solved)

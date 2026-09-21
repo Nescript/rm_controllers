@@ -22,7 +22,7 @@ public:
   virtual void clearRecoveryFlag() = 0;
   virtual bool getCompleteStand() const = 0;
   virtual Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> getCoeffs() = 0;
-  virtual bool solveMpc(const Eigen::Matrix<double, STATE_DIM, 1>& state,
+  virtual bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                         const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                         Eigen::Matrix<double, CONTROL_DIM, 1>& control) = 0;
 

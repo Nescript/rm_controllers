@@ -8,6 +8,9 @@
 #include <geometry_msgs/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
+#include <cmath>
+#include <limits>
+
 #include <pluginlib/class_list_macros.hpp>
 #include <unsupported/Eigen/MatrixFunctions>
 
@@ -332,25 +335,56 @@ bool BipedalController::initParams(ros::NodeHandle& controller_nh)
 
 bool BipedalController::setupMpc(ros::NodeHandle& controller_nh)
 {
-  Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
-  Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
-  generateAB(model_params_, continuous_a, continuous_b, controller_nh.param("mpc_model_leg_length", 0.2));
-  mpc_left_ = std::make_unique<TinyMpcController>();
-  mpc_right_ = std::make_unique<TinyMpcController>();
-  if (!mpc_left_->init(controller_nh, continuous_a, continuous_b, q_, r_) ||
-      !mpc_right_->init(controller_nh, continuous_a, continuous_b, q_, r_))
-    return false;
+  // Gain-scheduled MPC: precompute one linearized model per operating-point leg
+  // length so that medium/high leg lengths are covered by a matched MPC solver.
+  if (!controller_nh.getParam("mpc_leg_lengths", mpc_leg_lengths_) || mpc_leg_lengths_.empty())
+  {
+    const double single = controller_nh.param("mpc_model_leg_length", 0.2);
+    mpc_leg_lengths_.push_back(single);
+  }
+  for (const double length : mpc_leg_lengths_)
+  {
+    if (!std::isfinite(length) || length <= 0.0)
+    {
+      ROS_ERROR("Invalid mpc_leg_lengths entry: %f", length);
+      return false;
+    }
+    Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
+    Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
+    generateAB(model_params_, continuous_a, continuous_b, length);
+
+    auto mpc_left = std::make_unique<TinyMpcController>();
+    auto mpc_right = std::make_unique<TinyMpcController>();
+    if (!mpc_left->init(controller_nh, continuous_a, continuous_b, q_, r_) ||
+        !mpc_right->init(controller_nh, continuous_a, continuous_b, q_, r_))
+      return false;
+    mpc_left_solvers_.push_back(std::move(mpc_left));
+    mpc_right_solvers_.push_back(std::move(mpc_right));
+    ROS_INFO("[balance] TinyMPC initialized for leg length %.3f m", length);
+  }
   return true;
 }
 
-bool BipedalController::solveMpc(const Eigen::Matrix<double, STATE_DIM, 1>& state,
+bool BipedalController::solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                                  const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                                  Eigen::Matrix<double, CONTROL_DIM, 1>& control)
 {
-  static bool left_turn = false;
-  auto& solver = left_turn ? mpc_right_ : mpc_left_;
-  left_turn = !left_turn;
-  return solver != nullptr && solver->solve(state, reference, control);
+  const auto& solvers = (side == LEFT) ? mpc_left_solvers_ : mpc_right_solvers_;
+  if (solvers.empty())
+    return false;
+
+  size_t best = 0;
+  double best_dist = std::numeric_limits<double>::max();
+  for (size_t i = 0; i < mpc_leg_lengths_.size(); ++i)
+  {
+    const double dist = std::abs(leg_length - mpc_leg_lengths_[i]);
+    if (dist < best_dist)
+    {
+      best_dist = dist;
+      best = i;
+    }
+  }
+  return solvers[best] != nullptr && solvers[best]->solve(state, reference, control);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle& controller_nh)

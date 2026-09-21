@@ -58,7 +58,7 @@ public:
   bool getStateChange() const override { return balance_state_changed_; }
   bool getCompleteStand() const override { return complete_stand_; }
   Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> getCoeffs() override { return coeffs_; }
-  bool solveMpc(const Eigen::Matrix<double, STATE_DIM, 1>& state,
+  bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                 const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                 Eigen::Matrix<double, CONTROL_DIM, 1>& control) override;
   const std::shared_ptr<ModelParams>& getModelParams() const override { return model_params_; }
@@ -115,8 +115,10 @@ private:
   Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> coeffs_;
   Eigen::Matrix<double, STATE_DIM, STATE_DIM> q_{};
   Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM> r_{};
-  std::unique_ptr<TinyMpcController> mpc_left_;
-  std::unique_ptr<TinyMpcController> mpc_right_;
+  // Gain-scheduled MPC: one solver per (leg, operating-point leg length)
+  std::vector<std::unique_ptr<TinyMpcController>> mpc_left_solvers_;
+  std::vector<std::unique_ptr<TinyMpcController>> mpc_right_solvers_;
+  std::vector<double> mpc_leg_lengths_;
 
   std::shared_ptr<ModelParams> model_params_;
   std::shared_ptr<ControlParams> control_params_;
