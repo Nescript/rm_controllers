@@ -158,15 +158,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   clamp(x_left(THETA), -0.6f, 0.6f);
   clamp(x_right(THETA), -0.6f, 0.6f);
 
-  const bool left_mpc_solved =
-      controller->solveMpc(LEFT, left_pos.L0, -x_left, Matrix<double, STATE_DIM, 1>::Zero(), u_left);
-  const bool right_mpc_solved =
-      controller->solveMpc(RIGHT, right_pos.L0, -x_right, Matrix<double, STATE_DIM, 1>::Zero(), u_right);
-  if (!left_mpc_solved)
-    u_left = k_left * (-x_left);
-  if (!right_mpc_solved)
-    u_right = k_right * (-x_right);
-
   // Compute leg thrust
   auto model_params_ = controller->getModelParams();
   auto control_params_ = controller->getControlParams();
@@ -267,6 +258,58 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     }
   }
 
+  // Map joint torque limits (DM8009: 20 Nm continuous / 40 Nm peak) into the MPC
+  // virtual-torque input channel through the current leg Jacobian.
+  //   tau = J^T * [F_leg, Tp + T_theta_diff]
+  const auto& torque_limits = controller->getTorqueLimitParams();
+  const double leg_torque_limit = torque_limits->enable_peak ? torque_limits->leg_joint_peak :
+                                                               torque_limits->leg_joint_continuous;
+  const double wheel_torque_limit = torque_limits->enable_peak ? torque_limits->wheel_joint_peak :
+                                                                 torque_limits->wheel_joint_continuous;
+  Eigen::Matrix<double, CONTROL_DIM, 1> mpc_u_min, mpc_u_max;
+  mpc_u_min << -wheel_torque_limit, -std::numeric_limits<double>::max();
+  mpc_u_max << wheel_torque_limit, std::numeric_limits<double>::max();
+
+  auto compute_tp_bounds = [](const VMCPtr& vmc, double f_leg, double t_theta_diff, double leg_limit, double& tp_min,
+                              double& tp_max) {
+    const auto& J = vmc->getJacobian();
+    const double j00 = J[0][0], j01 = J[0][1], j10 = J[1][0], j11 = J[1][1];
+    const double eps = 1e-6;
+    tp_min = -std::numeric_limits<double>::max();
+    tp_max = std::numeric_limits<double>::max();
+    if (std::abs(j10) > eps)
+    {
+      const double bound1 = (-leg_limit - j00 * f_leg - j10 * t_theta_diff) / j10;
+      const double bound2 = (leg_limit - j00 * f_leg - j10 * t_theta_diff) / j10;
+      tp_min = std::max(tp_min, std::min(bound1, bound2));
+      tp_max = std::min(tp_max, std::max(bound1, bound2));
+    }
+    if (std::abs(j11) > eps)
+    {
+      const double bound1 = (-leg_limit - j01 * f_leg + j11 * t_theta_diff) / j11;
+      const double bound2 = (leg_limit - j01 * f_leg + j11 * t_theta_diff) / j11;
+      tp_min = std::max(tp_min, std::min(bound1, bound2));
+      tp_max = std::min(tp_max, std::max(bound1, bound2));
+    }
+  };
+
+  double left_tp_min, left_tp_max, right_tp_min, right_tp_max;
+  compute_tp_bounds(left_leg_state.vmc, F_leg[LEFT], T_theta_diff, leg_torque_limit, left_tp_min, left_tp_max);
+  compute_tp_bounds(right_leg_state.vmc, F_leg[RIGHT], -T_theta_diff, leg_torque_limit, right_tp_min, right_tp_max);
+  mpc_u_min(LEG_Tp) = left_tp_min;
+  mpc_u_max(LEG_Tp) = left_tp_max;
+  const bool left_mpc_solved = controller->solveMpc(LEFT, left_pos.L0, -x_left, Matrix<double, STATE_DIM, 1>::Zero(),
+                                                    mpc_u_min, mpc_u_max, u_left);
+  mpc_u_min(LEG_Tp) = right_tp_min;
+  mpc_u_max(LEG_Tp) = right_tp_max;
+  const bool right_mpc_solved = controller->solveMpc(RIGHT, right_pos.L0, -x_right,
+                                                     Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
+                                                     u_right);
+  if (!left_mpc_solved)
+    u_left = k_left * (-x_left);
+  if (!right_mpc_solved)
+    u_right = k_right * (-x_right);
+
   // Unstick detection
   Eigen::Matrix<double, CONTROL_DIM, STATE_DIM> k_left_unstick{}, k_right_unstick{};
   k_left_unstick.setZero();
@@ -318,11 +361,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   right_leg_state.vmc->leg_conv(F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, right_T);
   double left_wheel_cmd = unstick_flag ? 0. : u_left(WHEEL_T) - T_yaw - T_wheel_diff;
   double right_wheel_cmd = unstick_flag ? 0. : u_right(WHEEL_T) + T_yaw - T_wheel_diff;
-  const auto& torque_limits = controller->getTorqueLimitParams();
-  const double leg_torque_limit = torque_limits->enable_peak ? torque_limits->leg_joint_peak :
-                                                                  torque_limits->leg_joint_continuous;
-  const double wheel_torque_limit = torque_limits->enable_peak ? torque_limits->wheel_joint_peak :
-                                                                      torque_limits->wheel_joint_continuous;
   clamp(left_T[0], -leg_torque_limit, leg_torque_limit);
   clamp(left_T[1], -leg_torque_limit, leg_torque_limit);
   clamp(right_T[0], -leg_torque_limit, leg_torque_limit);

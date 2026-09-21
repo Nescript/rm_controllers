@@ -24,6 +24,8 @@ public:
   virtual Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> getCoeffs() = 0;
   virtual bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                         const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                        const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
+                        const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
                         Eigen::Matrix<double, CONTROL_DIM, 1>& control) = 0;
 
   virtual const std::shared_ptr<ModelParams>& getModelParams() const = 0;

@@ -367,6 +367,8 @@ bool BipedalController::setupMpc(ros::NodeHandle& controller_nh)
 
 bool BipedalController::solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                                  const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                                 const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
+                                 const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
                                  Eigen::Matrix<double, CONTROL_DIM, 1>& control)
 {
   const auto& solvers = (side == LEFT) ? mpc_left_solvers_ : mpc_right_solvers_;
@@ -384,7 +386,10 @@ bool BipedalController::solveMpc(Side side, double leg_length, const Eigen::Matr
       best = i;
     }
   }
-  return solvers[best] != nullptr && solvers[best]->solve(state, reference, control);
+  const auto& solver = solvers[best];
+  if (solver == nullptr || !solver->updateInputBounds(input_min, input_max))
+    return false;
+  return solver->solve(state, reference, control);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle& controller_nh)

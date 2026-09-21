@@ -60,6 +60,8 @@ public:
   Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> getCoeffs() override { return coeffs_; }
   bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                 const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
+                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
                 Eigen::Matrix<double, CONTROL_DIM, 1>& control) override;
   const std::shared_ptr<ModelParams>& getModelParams() const override { return model_params_; }
   const std::shared_ptr<ControlParams>& getControlParams() const override { return control_params_; }

@@ -109,4 +109,17 @@ bool TinyMpcController::solve(const Eigen::Matrix<double, STATE_DIM, 1>& state,
   control = first_control;
   return true;
 }
+
+bool TinyMpcController::updateInputBounds(const Eigen::Matrix<double, CONTROL_DIM, 1>& u_min,
+                                          const Eigen::Matrix<double, CONTROL_DIM, 1>& u_max)
+{
+  if (!enabled_ || solver_ == nullptr || !u_min.allFinite() || !u_max.allFinite())
+    return false;
+  for (int step = 0; step < solver_->work->N - 1; ++step)
+  {
+    solver_->work->u_min.col(step) = u_min;
+    solver_->work->u_max.col(step) = u_max;
+  }
+  return true;
+}
 }  // namespace rm_chassis_controllers
