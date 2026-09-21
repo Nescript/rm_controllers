@@ -25,12 +25,13 @@ public:
   virtual bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                         const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                         const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
-                        const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
+                        const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min, double vel_max,
                         Eigen::Matrix<double, CONTROL_DIM, 1>& control) = 0;
 
   virtual const std::shared_ptr<ModelParams>& getModelParams() const = 0;
   virtual const std::shared_ptr<ControlParams>& getControlParams() const = 0;
   virtual const std::shared_ptr<TorqueLimitParams>& getTorqueLimitParams() const = 0;
+  virtual const std::shared_ptr<RolloverParams>& getRolloverParams() const = 0;
   virtual const std::shared_ptr<BiasParams>& getBiasParams() const = 0;
   virtual const std::shared_ptr<LegStateThresholdParams>& getLegThresholdParams() const = 0;
   virtual const std::shared_ptr<ChassisGeometryParams>& getChassisGeometryParams() const = 0;

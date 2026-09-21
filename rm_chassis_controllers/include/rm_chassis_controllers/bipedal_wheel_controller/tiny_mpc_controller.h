@@ -35,6 +35,10 @@ public:
   bool updateInputBounds(const Eigen::Matrix<double, CONTROL_DIM, 1>& u_min,
                          const Eigen::Matrix<double, CONTROL_DIM, 1>& u_max);
 
+  // Overwrite the horizon velocity-state bounds before solving so rollover
+  // constraints can be enforced every cycle.
+  bool updateVelStateBounds(double vel_min, double vel_max);
+
   bool enabled() const { return enabled_; }
 
 private:

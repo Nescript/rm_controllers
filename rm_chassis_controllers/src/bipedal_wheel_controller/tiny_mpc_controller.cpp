@@ -122,4 +122,16 @@ bool TinyMpcController::updateInputBounds(const Eigen::Matrix<double, CONTROL_DI
   }
   return true;
 }
+
+bool TinyMpcController::updateVelStateBounds(double vel_min, double vel_max)
+{
+  if (!enabled_ || solver_ == nullptr || !std::isfinite(vel_min) || !std::isfinite(vel_max))
+    return false;
+  for (int step = 0; step < solver_->work->N; ++step)
+  {
+    solver_->work->x_min(VEL, step) = vel_min;
+    solver_->work->x_max(VEL, step) = vel_max;
+  }
+  return true;
+}
 }  // namespace rm_chassis_controllers

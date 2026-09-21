@@ -323,10 +323,12 @@ bool BipedalController::initParams(ros::NodeHandle& controller_nh)
   leg_threshold_params_ = std::make_shared<LegStateThresholdParams>();
   spring_params_ = std::make_shared<SpringParams>();
   chassis_geometry_params_ = std::make_shared<ChassisGeometryParams>();
+  rollover_params_ = std::make_shared<RolloverParams>();
 
   if (!setupModelParams(controller_nh) || !setupLQR(controller_nh) || !setupMpc(controller_nh) ||
       !setupBiasParams(controller_nh) ||
       !setupControlParams(controller_nh) || !setupTorqueLimitParams(controller_nh) ||
+      !setupRolloverParams(controller_nh) ||
       !setupThresholdParams(controller_nh) || !setupSpringParams(controller_nh) ||
       !setupChassisGeometryParams(controller_nh))
     return false;
@@ -368,8 +370,8 @@ bool BipedalController::setupMpc(ros::NodeHandle& controller_nh)
 bool BipedalController::solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                                  const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                                  const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
-                                 const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
-                                 Eigen::Matrix<double, CONTROL_DIM, 1>& control)
+                                 const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min,
+                                 double vel_max, Eigen::Matrix<double, CONTROL_DIM, 1>& control)
 {
   const auto& solvers = (side == LEFT) ? mpc_left_solvers_ : mpc_right_solvers_;
   if (solvers.empty())
@@ -387,7 +389,8 @@ bool BipedalController::solveMpc(Side side, double leg_length, const Eigen::Matr
     }
   }
   const auto& solver = solvers[best];
-  if (solver == nullptr || !solver->updateInputBounds(input_min, input_max))
+  if (solver == nullptr || !solver->updateInputBounds(input_min, input_max) ||
+      !solver->updateVelStateBounds(vel_min, vel_max))
     return false;
   return solver->solve(state, reference, control);
 }
@@ -564,6 +567,25 @@ bool BipedalController::setupTorqueLimitParams(ros::NodeHandle& controller_nh)
     ROS_ERROR("Invalid wheel motor torque limits");
     return false;
   }
+  return true;
+}
+
+bool BipedalController::setupRolloverParams(ros::NodeHandle& controller_nh)
+{
+  rollover_params_->margin = controller_nh.param("rollover_margin", 0.7);
+  rollover_params_->min_yaw_rate = controller_nh.param("rollover_min_yaw_rate", 0.5);
+  rollover_params_->enabled = controller_nh.param("rollover_constraint_enabled", true);
+
+  if (!std::isfinite(rollover_params_->margin) || rollover_params_->margin <= 0.0 ||
+      rollover_params_->margin > 1.0 || !std::isfinite(rollover_params_->min_yaw_rate) ||
+      rollover_params_->min_yaw_rate <= 0.0)
+  {
+    ROS_ERROR("Invalid rollover constraint parameters");
+    return false;
+  }
+  ROS_INFO("[balance] Rollover constraint %s (margin %.2f, min_yaw_rate %.2f)",
+           rollover_params_->enabled ? "enabled" : "disabled", rollover_params_->margin,
+           rollover_params_->min_yaw_rate);
   return true;
 }
 

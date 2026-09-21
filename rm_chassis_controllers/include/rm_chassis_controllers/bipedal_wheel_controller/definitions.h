@@ -57,6 +57,15 @@ struct TorqueLimitParams
   bool enable_peak{ false };
 };
 
+struct RolloverParams
+{
+  // Safety margin mu_s < 1 scales the theoretical tipping acceleration g*d/(2h).
+  double margin{ 0.7 };
+  // Lower bound on |yaw_rate| used in v_max to avoid division by ~0.
+  double min_yaw_rate{ 0.5 };
+  bool enabled{ true };
+};
+
 struct BiasParams
 {
   double x;

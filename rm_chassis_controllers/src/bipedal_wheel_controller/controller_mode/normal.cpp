@@ -128,6 +128,24 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   {
     leg_length_des = controller->getDefaultLegLength();
   }
+
+  // Rollover constraint: limit forward speed so the lateral acceleration
+  // v * yaw_rate stays below the tipping threshold g*d/(2*h(L0)) with margin.
+  const auto& rollover_params = controller->getRolloverParams();
+  const auto& geometry_params = controller->getChassisGeometryParams();
+  const double avg_leg_length = (left_pos.L0 + right_pos.L0) / 2.0;
+  const double cog_height = avg_leg_length + geometry_params->chassis_height;
+  const double yaw_rate_abs =
+      std::max(std::abs(chassis_state.angular_vel.z), rollover_params->min_yaw_rate);
+  double rollover_v_max = std::numeric_limits<double>::max();
+  if (rollover_params->enabled && cog_height > 0.0)
+  {
+    const double tip_acc = rollover_params->margin * controller->getModelParams()->g *
+                           geometry_params->wheel_track / (2.0 * cog_height);
+    rollover_v_max = tip_acc / yaw_rate_abs;
+  }
+  clamp(x_left_ref(VEL), -rollover_v_max, rollover_v_max);
+  clamp(x_right_ref(VEL), -rollover_v_max, rollover_v_max);
   if (controller->getBaseState() != rm_msgs::ChassisCmd::RAW)
   {
     if (!controller->getMoveFlag())
@@ -298,13 +316,14 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   compute_tp_bounds(right_leg_state.vmc, F_leg[RIGHT], -T_theta_diff, leg_torque_limit, right_tp_min, right_tp_max);
   mpc_u_min(LEG_Tp) = left_tp_min;
   mpc_u_max(LEG_Tp) = left_tp_max;
-  const bool left_mpc_solved = controller->solveMpc(LEFT, left_pos.L0, -x_left, Matrix<double, STATE_DIM, 1>::Zero(),
-                                                    mpc_u_min, mpc_u_max, u_left);
+  const bool left_mpc_solved =
+      controller->solveMpc(LEFT, left_pos.L0, -x_left, Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
+                           -rollover_v_max, rollover_v_max, u_left);
   mpc_u_min(LEG_Tp) = right_tp_min;
   mpc_u_max(LEG_Tp) = right_tp_max;
-  const bool right_mpc_solved = controller->solveMpc(RIGHT, right_pos.L0, -x_right,
-                                                     Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
-                                                     u_right);
+  const bool right_mpc_solved =
+      controller->solveMpc(RIGHT, right_pos.L0, -x_right, Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min,
+                           mpc_u_max, -rollover_v_max, rollover_v_max, u_right);
   if (!left_mpc_solved)
     u_left = k_left * (-x_left);
   if (!right_mpc_solved)

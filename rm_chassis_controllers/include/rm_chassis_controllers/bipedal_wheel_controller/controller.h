@@ -61,11 +61,12 @@ public:
   bool solveMpc(Side side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
                 const Eigen::Matrix<double, STATE_DIM, 1>& reference,
                 const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
-                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max,
+                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min, double vel_max,
                 Eigen::Matrix<double, CONTROL_DIM, 1>& control) override;
   const std::shared_ptr<ModelParams>& getModelParams() const override { return model_params_; }
   const std::shared_ptr<ControlParams>& getControlParams() const override { return control_params_; }
   const std::shared_ptr<TorqueLimitParams>& getTorqueLimitParams() const override { return torque_limit_params_; }
+  const std::shared_ptr<RolloverParams>& getRolloverParams() const override { return rollover_params_; }
   const std::shared_ptr<BiasParams>& getBiasParams() const override { return bias_params_; }
   const std::shared_ptr<LegStateThresholdParams>& getLegThresholdParams() const override { return leg_threshold_params_; }
   const std::shared_ptr<ChassisGeometryParams>& getChassisGeometryParams() const override { return chassis_geometry_params_; }
@@ -104,6 +105,7 @@ private:
   bool setupModelParams(ros::NodeHandle& controller_nh);
   bool setupControlParams(ros::NodeHandle& controller_nh);
   bool setupTorqueLimitParams(ros::NodeHandle& controller_nh);
+  bool setupRolloverParams(ros::NodeHandle& controller_nh);
   bool setupBiasParams(ros::NodeHandle& controller_nh);
   bool setupThresholdParams(ros::NodeHandle& controller_nh);
   bool setupSpringParams(ros::NodeHandle& controller_nh);
@@ -125,6 +127,7 @@ private:
   std::shared_ptr<ModelParams> model_params_;
   std::shared_ptr<ControlParams> control_params_;
   std::shared_ptr<TorqueLimitParams> torque_limit_params_;
+  std::shared_ptr<RolloverParams> rollover_params_;
   std::shared_ptr<BiasParams> bias_params_;
   std::shared_ptr<SpringParams> spring_params_;
   std::shared_ptr<ChassisGeometryParams> chassis_geometry_params_;
