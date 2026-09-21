@@ -515,8 +515,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     ctx.logger.info("[balance] Exit NORMAL");
   }
 
-  // Protection to protect mode
-  if (leg_length_des < 0.22)
+  // Protection to protect mode (disabled during jump — retraction targets L0=0.11 < 0.22)
+  if (jump_phase_ == JumpPhase::IDLE && leg_length_des < 0.22)
   {
     if ((std::abs(x_left(0)) > 0.6 || std::abs(x_right(0)) > 0.6 || std::abs(chassis_state.pitch) > 0.4 ||
          std::abs(chassis_state.roll) > 0.4) ||
