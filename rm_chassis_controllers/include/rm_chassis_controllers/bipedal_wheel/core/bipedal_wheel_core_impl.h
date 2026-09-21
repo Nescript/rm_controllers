@@ -47,6 +47,40 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   last_linear_acc_base_x_ = 0.0;
   slip_flag_ = false;
 
+  // Initialize MPC solvers
+  if (config_.mpc.enabled)
+  {
+    mpc_leg_lengths_ = config_.mpc.leg_lengths;
+    if (mpc_leg_lengths_.empty())
+    {
+      mpc_leg_lengths_.push_back(0.2);
+    }
+    for (const double length : mpc_leg_lengths_)
+    {
+      if (!std::isfinite(length) || length <= 0.0)
+      {
+        logger.error("[BipedalWheelCore] Invalid mpc_leg_lengths entry");
+        return false;
+      }
+      Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
+      Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
+      generateAB(config_.model_params, continuous_a, continuous_b, length);
+
+      auto mpc_left = std::make_unique<TinyMpcController>();
+      auto mpc_right = std::make_unique<TinyMpcController>();
+      if (!mpc_left->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc) ||
+          !mpc_right->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc))
+      {
+        logger.error("[BipedalWheelCore] Failed to initialize TinyMPC");
+        return false;
+      }
+      mpc_left_solvers_.push_back(std::move(mpc_left));
+      mpc_right_solvers_.push_back(std::move(mpc_right));
+    }
+    logger.info("[BipedalWheelCore] TinyMPC initialized for " +
+                std::to_string(mpc_leg_lengths_.size()) + " leg lengths");
+  }
+
   return true;
 }
 
@@ -127,7 +161,8 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
                                                                                 pid_yaw_vel_,
                                                                                 pid_theta_diff_,
                                                                                 pid_roll_,
-                                                                                pid_wheel_vel_diff_ };
+                                                                                pid_wheel_vel_diff_,
+                                                                                this };
 
   // 5. Run active state
   std::visit([&ctx](auto& state) { state.execute(ctx); }, FSM_variant_);
@@ -276,6 +311,36 @@ FsmState BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilt
           return FsmState::PROTECT;
       },
       FSM_variant_);
+}
+
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
+bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::solveMpc(
+    LegIndex side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
+    const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+    const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
+    const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min, double vel_max,
+    Eigen::Matrix<double, CONTROL_DIM, 1>& control)
+{
+  const auto& solvers = (side == bipedal_wheel_core::LEFT) ? mpc_left_solvers_ : mpc_right_solvers_;
+  if (solvers.empty())
+    return false;
+
+  size_t best = 0;
+  double best_dist = std::numeric_limits<double>::max();
+  for (size_t i = 0; i < mpc_leg_lengths_.size(); ++i)
+  {
+    const double dist = std::abs(leg_length - mpc_leg_lengths_[i]);
+    if (dist < best_dist)
+    {
+      best_dist = dist;
+      best = i;
+    }
+  }
+  const auto& solver = solvers[best];
+  if (solver == nullptr || !solver->updateInputBounds(input_min, input_max) ||
+      !solver->updateVelStateBounds(vel_min, vel_max))
+    return false;
+  return solver->solve(state, reference, control);
 }
 
 }  // namespace bipedal_wheel_core

@@ -1,7 +1,9 @@
 #include "bipedal_wheel/core/fsm/state_normal.h"
 #include "bipedal_wheel/core/helper_functions.h"
 #include "bipedal_wheel/controllers.h"
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace bipedal_wheel_core
 {
@@ -186,10 +188,58 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   clamp(x_left(THETA), -0.6, 0.6);
   clamp(x_right(THETA), -0.6, 0.6);
 
-  u_left = k_left * (-x_left);
-  u_right = k_right * (-x_right);
+  // Rollover constraint: limit forward speed so the lateral acceleration
+  // v * yaw_rate stays below the tipping threshold g*d/(2*h) with margin.
+  const auto& rollover_params = ctx.config.rollover;
+  const double avg_leg_length = (left_pos.L0 + right_pos.L0) / 2.0;
+  const double cog_height = avg_leg_length + ctx.config.chassis_geometry.chassis_height;
+  const double yaw_rate_abs = std::max(std::abs(chassis_state.angular_vel.z()), rollover_params.min_yaw_rate);
+  double rollover_v_max = std::numeric_limits<double>::max();
+  if (rollover_params.enabled && cog_height > 0.0)
+  {
+    const double tip_acc =
+        rollover_params.margin * ctx.config.model_params.g * ctx.config.chassis_geometry.wheel_track /
+        (2.0 * cog_height);
+    rollover_v_max = tip_acc / yaw_rate_abs;
+  }
+  clamp(x_left_ref(VEL), -rollover_v_max, rollover_v_max);
+  clamp(x_right_ref(VEL), -rollover_v_max, rollover_v_max);
 
-  // Compute leg thrust forces
+  // MPC solve with joint-space torque constraints
+  const auto& torque_limits = ctx.config.torque_limit;
+  const double leg_torque_limit =
+      torque_limits.enable_peak ? torque_limits.leg_joint_peak : torque_limits.leg_joint_continuous;
+  const double wheel_torque_limit =
+      torque_limits.enable_peak ? torque_limits.wheel_joint_peak : torque_limits.wheel_joint_continuous;
+
+  Eigen::Matrix<double, CONTROL_DIM, 1> mpc_u_min, mpc_u_max;
+  mpc_u_min << -wheel_torque_limit, -std::numeric_limits<double>::max();
+  mpc_u_max << wheel_torque_limit, std::numeric_limits<double>::max();
+
+  auto compute_tp_bounds = [](const VMC* vmc, double f_leg, double t_theta_diff, double leg_limit, double& tp_min,
+                              double& tp_max) {
+    const auto& J = vmc->getJacobian();
+    const double j00 = J[0][0], j01 = J[0][1], j10 = J[1][0], j11 = J[1][1];
+    const double eps = 1e-6;
+    tp_min = -std::numeric_limits<double>::max();
+    tp_max = std::numeric_limits<double>::max();
+    if (std::abs(j10) > eps)
+    {
+      const double bound1 = (-leg_limit - j00 * f_leg - j10 * t_theta_diff) / j10;
+      const double bound2 = (leg_limit - j00 * f_leg - j10 * t_theta_diff) / j10;
+      tp_min = std::max(tp_min, std::min(bound1, bound2));
+      tp_max = std::min(tp_max, std::max(bound1, bound2));
+    }
+    if (std::abs(j11) > eps)
+    {
+      const double bound1 = (-leg_limit - j01 * f_leg + j11 * t_theta_diff) / j11;
+      const double bound2 = (leg_limit - j01 * f_leg + j11 * t_theta_diff) / j11;
+      tp_min = std::max(tp_min, std::min(bound1, bound2));
+      tp_max = std::min(tp_max, std::max(bound1, bound2));
+    }
+  };
+
+  // Compute leg thrust forces first (needed for Jacobian-based MPC input bounds)
   double gravity = ctx.config.model_params.f_gravity;
   // Spring forces
   double left_spring_force =
@@ -363,6 +413,26 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
       }
     }
   }
+
+  // MPC solve with joint-space torque constraints
+  double left_tp_min, left_tp_max, right_tp_min, right_tp_max;
+  compute_tp_bounds(ctx.left_vmc, F_leg[LEFT], T_theta_diff, leg_torque_limit, left_tp_min, left_tp_max);
+  compute_tp_bounds(ctx.right_vmc, F_leg[RIGHT], -T_theta_diff, leg_torque_limit, right_tp_min, right_tp_max);
+  mpc_u_min(LEG_Tp) = left_tp_min;
+  mpc_u_max(LEG_Tp) = left_tp_max;
+  const bool left_mpc_solved =
+      ctx.core->solveMpc(bipedal_wheel_core::LEFT, left_pos.L0, -x_left, Eigen::Matrix<double, STATE_DIM, 1>::Zero(),
+                         mpc_u_min, mpc_u_max, -rollover_v_max, rollover_v_max, u_left);
+  mpc_u_min(LEG_Tp) = right_tp_min;
+  mpc_u_max(LEG_Tp) = right_tp_max;
+  const bool right_mpc_solved =
+      ctx.core->solveMpc(bipedal_wheel_core::RIGHT, right_pos.L0, -x_right,
+                         Eigen::Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max, -rollover_v_max,
+                         rollover_v_max, u_right);
+  if (!left_mpc_solved)
+    u_left = k_left * (-x_left);
+  if (!right_mpc_solved)
+    u_right = k_right * (-x_right);
 
   // Unstick detection
   Eigen::Matrix<double, CONTROL_DIM, STATE_DIM> k_left_unstick, k_right_unstick;

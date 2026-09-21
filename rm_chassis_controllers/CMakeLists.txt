@@ -84,9 +84,7 @@ set(BIPEDAL_SOURCES
         src/bipedal_wheel/core/dynamics/gen_A.c
         src/bipedal_wheel/core/dynamics/gen_B.c
         src/bipedal_wheel/core/vmc/VMC.cpp
-        src/bipedal_wheel_controller/series_legged_vmc_controller.cpp
-        src/bipedal_wheel_controller/vmc/VMC.cpp
-        src/bipedal_wheel_controller/tiny_mpc_controller.cpp
+        src/bipedal_wheel/core/tiny_mpc_controller.cpp
 )
 
 ## Declare cpp executables

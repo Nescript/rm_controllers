@@ -108,6 +108,8 @@ public:
   { return spd_; }
   inline const LegForce getForceReal() const
   { return force_real_; }
+  inline const double (*getJacobian() const)[2]
+  { return J_; }
 
 private:
   double J_[2][2]{};

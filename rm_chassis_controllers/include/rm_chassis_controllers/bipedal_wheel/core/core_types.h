@@ -118,6 +118,34 @@ struct ControlParams
   double off_ground_force = 90.0;
 };
 
+struct MpcParams
+{
+  bool enabled = false;
+  int horizon = 15;
+  int max_iter = 50;
+  double dt = 0.01;
+  double rho = 1.0;
+  std::vector<double> input_min;
+  std::vector<double> input_max;
+  std::vector<double> leg_lengths;
+};
+
+struct TorqueLimitParams
+{
+  double leg_joint_continuous = 20.0;
+  double leg_joint_peak = 40.0;
+  double wheel_joint_continuous = 2.8;
+  double wheel_joint_peak = 5.0;
+  bool enable_peak = false;
+};
+
+struct RolloverParams
+{
+  double margin = 0.7;
+  double min_yaw_rate = 0.5;
+  bool enabled = true;
+};
+
 struct BiasParams
 {
   double x = 0.0;
@@ -152,8 +180,15 @@ struct ControllerParams
   ControlParams control{};
   BiasParams bias{};
   LegStateThresholdParams threshold{};
-  
+  MpcParams mpc{};
+  TorqueLimitParams torque_limit{};
+  RolloverParams rollover{};
+
   double default_leg_length = 0.12;
+
+  // LQR weight matrices (also used for MPC)
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> q{};
+  Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM> r{};
 };
 
 struct ControllerCommands

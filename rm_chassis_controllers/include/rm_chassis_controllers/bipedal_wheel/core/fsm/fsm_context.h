@@ -7,6 +7,10 @@
 namespace bipedal_wheel_core
 {
 
+// Forward declaration for MPC access
+template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
+class BipedalWheelCore;
+
 template <typename PidType, typename LoggerType, typename RampFilterType, typename MovingAverageFilterType>
 struct FsmContext
 {
@@ -44,6 +48,9 @@ struct FsmContext
   PidType* pid_theta_diff = nullptr;
   PidType* pid_roll = nullptr;
   PidType* pid_wheel_vel_diff = nullptr;
+
+  // Pointer to core for MPC access
+  BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>* core = nullptr;
 };
 
 }  // namespace bipedal_wheel_core

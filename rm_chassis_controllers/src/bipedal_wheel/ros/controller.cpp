@@ -681,6 +681,36 @@ bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
   if (leg_threshold_params_)
     params.threshold = *leg_threshold_params_;
   params.default_leg_length = default_leg_length_;
+  params.q = q_;
+  params.r = r_;
+
+  // MPC parameters
+  params.mpc.enabled = controller_nh.param("mpc_enabled", false);
+  params.mpc.horizon = controller_nh.param("mpc_horizon", 15);
+  params.mpc.max_iter = controller_nh.param("mpc_max_iter", 50);
+  params.mpc.dt = controller_nh.param("mpc_dt", 0.01);
+  params.mpc.rho = controller_nh.param("mpc_rho", 1.0);
+  controller_nh.getParam("mpc_input_min", params.mpc.input_min);
+  controller_nh.getParam("mpc_input_max", params.mpc.input_max);
+  controller_nh.getParam("mpc_leg_lengths", params.mpc.leg_lengths);
+
+  // Torque limit parameters
+  params.torque_limit.leg_joint_continuous = controller_nh.param("leg_joint_torque_continuous", 20.0);
+  params.torque_limit.leg_joint_peak = controller_nh.param("leg_joint_torque_peak", 40.0);
+  const double wheel_motor_continuous = controller_nh.param("wheel_motor_torque_continuous", 2.8);
+  const double wheel_motor_peak = controller_nh.param("wheel_motor_torque_peak", 5.0);
+  const double wheel_reference_reduction = controller_nh.param("wheel_reference_reduction", 16.0);
+  const double wheel_urdf_reduction = std::abs(controller_nh.param("wheel_urdf_reduction", 258.0 / 17.0));
+  const double wheel_efficiency = controller_nh.param("wheel_transmission_efficiency", 1.0);
+  params.torque_limit.enable_peak = controller_nh.param("enable_peak_torque", false);
+  const double output_scale = wheel_urdf_reduction / wheel_reference_reduction * wheel_efficiency;
+  params.torque_limit.wheel_joint_continuous = wheel_motor_continuous * output_scale;
+  params.torque_limit.wheel_joint_peak = wheel_motor_peak * output_scale;
+
+  // Rollover constraint parameters
+  params.rollover.margin = controller_nh.param("rollover_margin", 0.7);
+  params.rollover.min_yaw_rate = controller_nh.param("rollover_min_yaw_rate", 0.5);
+  params.rollover.enabled = controller_nh.param("rollover_constraint_enabled", true);
 
   // 4. Initialize core algorithm
   logger_.init(controller_nh);

@@ -6,6 +6,7 @@
 #include "bipedal_wheel/core/core_types.h"
 #include "bipedal_wheel/core/helper_functions.h"
 #include "bipedal_wheel/core/vmc/VMC.h"
+#include "bipedal_wheel/core/tiny_mpc_controller.h"
 #include "bipedal_wheel/core/fsm/state_sit_down.h"
 #include "bipedal_wheel/core/fsm/state_stand_up.h"
 #include "bipedal_wheel/core/fsm/state_normal.h"
@@ -60,6 +61,13 @@ public:
   bool getRecoveryLegSpdTurnback() const
   { return recovery_leg_spd_turnback_; }
 
+  // MPC solving interface for normal mode
+  bool solveMpc(LegIndex side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
+                const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_min,
+                const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min, double vel_max,
+                Eigen::Matrix<double, CONTROL_DIM, 1>& control);
+
   void setCompleteStand(bool val)
   { complete_stand_ = val; }
   void setOverturn(bool val)
@@ -96,6 +104,15 @@ private:
   PidType* pid_theta_diff_ = nullptr;
   PidType* pid_roll_ = nullptr;
   PidType* pid_wheel_vel_diff_ = nullptr;
+
+  // Gain-scheduled MPC: one solver per (leg, operating-point leg length)
+  std::vector<std::unique_ptr<TinyMpcController>> mpc_left_solvers_;
+  std::vector<std::unique_ptr<TinyMpcController>> mpc_right_solvers_;
+  std::vector<double> mpc_leg_lengths_;
+
+  // LQR weight matrices (used for MPC)
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> q_{};
+  Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM> r_{};
 
   // Active PID legs populated dynamically during updates
   std::vector<PidType*> active_pid_legs_;
