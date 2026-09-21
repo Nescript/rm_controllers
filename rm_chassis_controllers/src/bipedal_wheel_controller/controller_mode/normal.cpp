@@ -158,8 +158,12 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   clamp(x_left(THETA), -0.6f, 0.6f);
   clamp(x_right(THETA), -0.6f, 0.6f);
 
-  u_left = k_left * (-x_left);
-  u_right = k_right * (-x_right);
+  const bool left_mpc_solved = controller->solveMpc(-x_left, Matrix<double, STATE_DIM, 1>::Zero(), u_left);
+  const bool right_mpc_solved = controller->solveMpc(-x_right, Matrix<double, STATE_DIM, 1>::Zero(), u_right);
+  if (!left_mpc_solved)
+    u_left = k_left * (-x_left);
+  if (!right_mpc_solved)
+    u_right = k_right * (-x_right);
 
   // Compute leg thrust
   auto model_params_ = controller->getModelParams();
@@ -312,6 +316,17 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   right_leg_state.vmc->leg_conv(F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, right_T);
   double left_wheel_cmd = unstick_flag ? 0. : u_left(WHEEL_T) - T_yaw - T_wheel_diff;
   double right_wheel_cmd = unstick_flag ? 0. : u_right(WHEEL_T) + T_yaw - T_wheel_diff;
+  const auto& torque_limits = controller->getTorqueLimitParams();
+  const double leg_torque_limit = torque_limits->enable_peak ? torque_limits->leg_joint_peak :
+                                                                  torque_limits->leg_joint_continuous;
+  const double wheel_torque_limit = torque_limits->enable_peak ? torque_limits->wheel_joint_peak :
+                                                                      torque_limits->wheel_joint_continuous;
+  clamp(left_T[0], -leg_torque_limit, leg_torque_limit);
+  clamp(left_T[1], -leg_torque_limit, leg_torque_limit);
+  clamp(right_T[0], -leg_torque_limit, leg_torque_limit);
+  clamp(right_T[1], -leg_torque_limit, leg_torque_limit);
+  clamp(left_wheel_cmd, -wheel_torque_limit, wheel_torque_limit);
+  clamp(right_wheel_cmd, -wheel_torque_limit, wheel_torque_limit);
   LegCommand left_cmd = { F_leg[LEFT], u_left(LEG_Tp) + T_theta_diff, { left_T[0], left_T[1] } },
              right_cmd = { F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, { right_T[0], right_T[1] } };
 

@@ -31,6 +31,7 @@
 #include "bipedal_wheel_controller/controller_mode/mode_manager.h"
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include "bipedal_wheel_controller/controller_interface.h"
+#include "bipedal_wheel_controller/tiny_mpc_controller.h"
 
 namespace rm_chassis_controllers
 {
@@ -57,8 +58,12 @@ public:
   bool getStateChange() const override { return balance_state_changed_; }
   bool getCompleteStand() const override { return complete_stand_; }
   Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> getCoeffs() override { return coeffs_; }
+  bool solveMpc(const Eigen::Matrix<double, STATE_DIM, 1>& state,
+                const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                Eigen::Matrix<double, CONTROL_DIM, 1>& control) override;
   const std::shared_ptr<ModelParams>& getModelParams() const override { return model_params_; }
   const std::shared_ptr<ControlParams>& getControlParams() const override { return control_params_; }
+  const std::shared_ptr<TorqueLimitParams>& getTorqueLimitParams() const override { return torque_limit_params_; }
   const std::shared_ptr<BiasParams>& getBiasParams() const override { return bias_params_; }
   const std::shared_ptr<LegStateThresholdParams>& getLegThresholdParams() const override { return leg_threshold_params_; }
   const std::shared_ptr<ChassisGeometryParams>& getChassisGeometryParams() const override { return chassis_geometry_params_; }
@@ -92,9 +97,11 @@ private:
   void updateEstimation(const ros::Time& time, const ros::Duration& period);
 
   bool setupLQR(ros::NodeHandle& controller_nh);
+  bool setupMpc(ros::NodeHandle& controller_nh);
   bool initParams(ros::NodeHandle& controller_nh);
   bool setupModelParams(ros::NodeHandle& controller_nh);
   bool setupControlParams(ros::NodeHandle& controller_nh);
+  bool setupTorqueLimitParams(ros::NodeHandle& controller_nh);
   bool setupBiasParams(ros::NodeHandle& controller_nh);
   bool setupThresholdParams(ros::NodeHandle& controller_nh);
   bool setupSpringParams(ros::NodeHandle& controller_nh);
@@ -108,9 +115,12 @@ private:
   Eigen::Matrix<double, 4, CONTROL_DIM * STATE_DIM> coeffs_;
   Eigen::Matrix<double, STATE_DIM, STATE_DIM> q_{};
   Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM> r_{};
+  std::unique_ptr<TinyMpcController> mpc_left_;
+  std::unique_ptr<TinyMpcController> mpc_right_;
 
   std::shared_ptr<ModelParams> model_params_;
   std::shared_ptr<ControlParams> control_params_;
+  std::shared_ptr<TorqueLimitParams> torque_limit_params_;
   std::shared_ptr<BiasParams> bias_params_;
   std::shared_ptr<SpringParams> spring_params_;
   std::shared_ptr<ChassisGeometryParams> chassis_geometry_params_;

@@ -48,6 +48,15 @@ struct ControlParams
   double jumpOverTime_;
 };
 
+struct TorqueLimitParams
+{
+  double leg_joint_continuous{ 20.0 };
+  double leg_joint_peak{ 40.0 };
+  double wheel_joint_continuous{ 2.8 };
+  double wheel_joint_peak{ 5.0 };
+  bool enable_peak{ false };
+};
+
 struct BiasParams
 {
   double x;

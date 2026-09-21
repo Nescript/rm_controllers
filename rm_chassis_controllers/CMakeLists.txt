@@ -26,6 +26,9 @@ find_package(catkin REQUIRED
 
 find_package(Eigen3 REQUIRED)
 
+add_subdirectory(../third_party/tinympc third_party/tinympc EXCLUDE_FROM_ALL)
+target_compile_options(tinympcstatic PRIVATE -Wno-unused-variable)
+
 generate_dynamic_reconfigure_options(
   cfg/LQRWeight.cfg
   cfg/PowerLimit.cfg
@@ -83,6 +86,7 @@ set(BIPEDAL_SOURCES
         src/bipedal_wheel/core/vmc/VMC.cpp
         src/bipedal_wheel_controller/series_legged_vmc_controller.cpp
         src/bipedal_wheel_controller/vmc/VMC.cpp
+        src/bipedal_wheel_controller/tiny_mpc_controller.cpp
 )
 
 ## Declare cpp executables
@@ -99,6 +103,7 @@ add_library(${PROJECT_NAME}
 ## Specify libraries to link executable targets against
 target_link_libraries(${PROJECT_NAME}
         ${catkin_LIBRARIES}
+        tinympcstatic
 )
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg)

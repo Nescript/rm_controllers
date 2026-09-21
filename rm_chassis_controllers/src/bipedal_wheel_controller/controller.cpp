@@ -315,16 +315,42 @@ bool BipedalController::initParams(ros::NodeHandle& controller_nh)
 {
   model_params_ = std::make_shared<ModelParams>();
   control_params_ = std::make_shared<ControlParams>();
+  torque_limit_params_ = std::make_shared<TorqueLimitParams>();
   bias_params_ = std::make_shared<BiasParams>();
   leg_threshold_params_ = std::make_shared<LegStateThresholdParams>();
   spring_params_ = std::make_shared<SpringParams>();
   chassis_geometry_params_ = std::make_shared<ChassisGeometryParams>();
 
-  if (!setupModelParams(controller_nh) || !setupLQR(controller_nh) || !setupBiasParams(controller_nh) ||
-      !setupControlParams(controller_nh) || !setupThresholdParams(controller_nh) || !setupSpringParams(controller_nh) ||
+  if (!setupModelParams(controller_nh) || !setupLQR(controller_nh) || !setupMpc(controller_nh) ||
+      !setupBiasParams(controller_nh) ||
+      !setupControlParams(controller_nh) || !setupTorqueLimitParams(controller_nh) ||
+      !setupThresholdParams(controller_nh) || !setupSpringParams(controller_nh) ||
       !setupChassisGeometryParams(controller_nh))
     return false;
   return true;
+}
+
+bool BipedalController::setupMpc(ros::NodeHandle& controller_nh)
+{
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
+  Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
+  generateAB(model_params_, continuous_a, continuous_b, controller_nh.param("mpc_model_leg_length", 0.2));
+  mpc_left_ = std::make_unique<TinyMpcController>();
+  mpc_right_ = std::make_unique<TinyMpcController>();
+  if (!mpc_left_->init(controller_nh, continuous_a, continuous_b, q_, r_) ||
+      !mpc_right_->init(controller_nh, continuous_a, continuous_b, q_, r_))
+    return false;
+  return true;
+}
+
+bool BipedalController::solveMpc(const Eigen::Matrix<double, STATE_DIM, 1>& state,
+                                 const Eigen::Matrix<double, STATE_DIM, 1>& reference,
+                                 Eigen::Matrix<double, CONTROL_DIM, 1>& control)
+{
+  static bool left_turn = false;
+  auto& solver = left_turn ? mpc_right_ : mpc_left_;
+  left_turn = !left_turn;
+  return solver != nullptr && solver->solve(state, reference, control);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle& controller_nh)
@@ -464,6 +490,39 @@ bool BipedalController::setupControlParams(ros::NodeHandle& controller_nh)
   if (!controller_nh.getParam("jumpOverTime", control_params_->jumpOverTime_))
   {
     ROS_ERROR("Load param fail, check the resist of jump_over_time");
+    return false;
+  }
+  return true;
+}
+
+bool BipedalController::setupTorqueLimitParams(ros::NodeHandle& controller_nh)
+{
+  torque_limit_params_->leg_joint_continuous =
+      controller_nh.param("leg_joint_torque_continuous", 20.0);
+  torque_limit_params_->leg_joint_peak = controller_nh.param("leg_joint_torque_peak", 40.0);
+
+  const double wheel_motor_continuous = controller_nh.param("wheel_motor_torque_continuous", 2.8);
+  const double wheel_motor_peak = controller_nh.param("wheel_motor_torque_peak", 5.0);
+  const double wheel_reference_reduction = controller_nh.param("wheel_reference_reduction", 16.0);
+  const double wheel_urdf_reduction =
+      std::abs(controller_nh.param("wheel_urdf_reduction", 258.0 / 17.0));
+  const double wheel_efficiency = controller_nh.param("wheel_transmission_efficiency", 1.0);
+  torque_limit_params_->enable_peak = controller_nh.param("enable_peak_torque", false);
+
+  if (wheel_reference_reduction <= 0.0 || wheel_urdf_reduction <= 0.0 || wheel_efficiency <= 0.0 ||
+      wheel_efficiency > 1.0 || torque_limit_params_->leg_joint_continuous <= 0.0 ||
+      torque_limit_params_->leg_joint_peak < torque_limit_params_->leg_joint_continuous)
+  {
+    ROS_ERROR("Invalid torque limit or wheel transmission parameters");
+    return false;
+  }
+
+  const double output_scale = wheel_urdf_reduction / wheel_reference_reduction * wheel_efficiency;
+  torque_limit_params_->wheel_joint_continuous = wheel_motor_continuous * output_scale;
+  torque_limit_params_->wheel_joint_peak = wheel_motor_peak * output_scale;
+  if (wheel_motor_continuous <= 0.0 || wheel_motor_peak < wheel_motor_continuous)
+  {
+    ROS_ERROR("Invalid wheel motor torque limits");
     return false;
   }
   return true;
