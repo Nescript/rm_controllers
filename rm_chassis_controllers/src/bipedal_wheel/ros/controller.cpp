@@ -158,6 +158,11 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     odom2base = odom2imu * imu2base;
     quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
 
+    // Auto-detect overturn: body z-axis pointing down in world frame
+    tf2::Vector3 z_body(0, 0, 1);
+    tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
+    overturn_ = (std::abs(pitch) > 0.65 || std::abs(roll) > 0.8) && z_world.z() < 0.0;
+
     geometry_msgs::TransformStamped tf_msg;
     tf_msg.transform = tf2::toMsg(odom2imu.inverse());
     tf_msg.header.stamp = time;

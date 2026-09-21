@@ -98,16 +98,17 @@ void VMC::calc_jacobian(double phi1, double phi4)
     phi0 = atan2(YC, XC - l5_ / 2);
 
     const double denom = sin(phi3 - phi2);
-    if (disc <= 0.0 || L0 < 1e-8 || fabs(denom) < 1e-4)
+    const double safe_denom = std::abs(denom) < 1e-4 ? std::copysign(1e-4, denom) : denom;
+    if (disc <= 0.0 || L0 < 1e-8)
     {
       J_[0][0] = J_[0][1] = J_[1][0] = J_[1][1] = 0.0;
       return;
     }
 
-    j11 = (l1_ * sin(phi0 - phi3) * sin(phi1 - phi2)) / denom;
-    j12 = (l4_ * sin(phi0 - phi2) * sin(phi3 - phi4)) / denom;
-    j21 = (l1_ * cos(phi0 - phi3) * sin(phi1 - phi2)) / (L0 * denom);
-    j22 = (l4_ * cos(phi0 - phi2) * sin(phi3 - phi4)) / (L0 * denom);
+    j11 = (l1_ * sin(phi0 - phi3) * sin(phi1 - phi2)) / safe_denom;
+    j12 = (l4_ * sin(phi0 - phi2) * sin(phi3 - phi4)) / safe_denom;
+    j21 = (l1_ * cos(phi0 - phi3) * sin(phi1 - phi2)) / (L0 * safe_denom);
+    j22 = (l4_ * cos(phi0 - phi2) * sin(phi3 - phi4)) / (L0 * safe_denom);
 
     J_[0][0] = j11;
     J_[0][1] = j12;
