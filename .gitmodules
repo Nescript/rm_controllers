@@ -1,3 +1,3 @@
 [submodule "third_party/tinympc"]
 	path = third_party/tinympc
-	url = https://github.com/TinyMPC/TinyMPC.git
+	url = git@github.com:Nescript/TinyMPC.git

@@ -27,6 +27,9 @@ find_package(catkin REQUIRED
 find_package(Eigen3 REQUIRED)
 
 add_subdirectory(../third_party/tinympc third_party/tinympc EXCLUDE_FROM_ALL)
+# TinyMPC bundles a different Eigen version. Both libraries exchange Eigen matrices
+# through tiny_setup(), so compile them against the same system Eigen headers.
+target_include_directories(tinympcstatic BEFORE PUBLIC ${EIGEN3_INCLUDE_DIR})
 target_compile_options(tinympcstatic PRIVATE -Wno-unused-variable)
 
 generate_dynamic_reconfigure_options(
