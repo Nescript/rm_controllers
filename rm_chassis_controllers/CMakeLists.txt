@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.10)
 project(rm_chassis_controllers)
 
+# Default this package (including TinyMPC) to optimized builds; honor an explicit build type.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 ## Use C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
