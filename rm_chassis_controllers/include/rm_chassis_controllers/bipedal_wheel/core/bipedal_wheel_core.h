@@ -6,13 +6,13 @@
 #include "bipedal_wheel/core/core_types.h"
 #include "bipedal_wheel/core/helper_functions.h"
 #include "bipedal_wheel/core/vmc/VMC.h"
+#include "bipedal_wheel/core/mpc_lpv_1d.h"
 #include "bipedal_wheel/core/tiny_mpc_controller.h"
 #include "bipedal_wheel/core/fsm/state_sit_down.h"
 #include "bipedal_wheel/core/fsm/state_stand_up.h"
 #include "bipedal_wheel/core/fsm/state_normal.h"
 #include "bipedal_wheel/core/fsm/state_recover.h"
 #include "bipedal_wheel/core/fsm/state_upstairs.h"
-#include "bipedal_wheel/core/fsm/state_protect.h"
 #include <memory>
 #include <variant>
 #include <vector>
@@ -82,7 +82,7 @@ public:
 private:
   bipedal_wheel_core::ControllerParams config_;
   bipedal_wheel_core::LQRStatus lqr_status_;
-  bipedal_wheel_core::RobotPhysicalState robot_mode_ = bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT;
+  bipedal_wheel_core::RobotPhysicalState robot_mode_ = bipedal_wheel_core::RobotPhysicalState::FALLEN;
 
   std::unique_ptr<VMC> left_vmc_;
   std::unique_ptr<VMC> right_vmc_;
@@ -105,10 +105,10 @@ private:
   PidType* pid_roll_ = nullptr;
   PidType* pid_wheel_vel_diff_ = nullptr;
 
-  // Gain-scheduled MPC: one solver per (leg, operating-point leg length)
-  std::vector<std::unique_ptr<TinyMpcController>> mpc_left_solvers_;
-  std::vector<std::unique_ptr<TinyMpcController>> mpc_right_solvers_;
-  std::vector<double> mpc_leg_lengths_;
+  // Continuous 1D LPV MPC: one solver per leg, cache scheduled by leg length.
+  std::unique_ptr<TinyMpcController> mpc_left_solver_;
+  std::unique_ptr<TinyMpcController> mpc_right_solver_;
+  MpcLpv1d mpc_lpv_1d_;
 
   // LQR weight matrices (used for MPC)
   Eigen::Matrix<double, STATE_DIM, STATE_DIM> q_{};
@@ -122,8 +122,7 @@ private:
                StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>,
                Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>,
                Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>,
-               Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>,
-               Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType> >
+               Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType> >
       FSM_variant_;
 
   void updateEstimation(double dt, const bipedal_wheel_core::SensorMeasurements& sens_in,

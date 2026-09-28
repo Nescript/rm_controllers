@@ -98,6 +98,30 @@ bool TinyMpcController::solve(const Eigen::Matrix<double, STATE_DIM, 1>& state,
   return true;
 }
 
+bool TinyMpcController::updateScheduledCache(const ScheduledMpcCache& cache)
+{
+  if (!enabled_ || solver_ == nullptr || !cache.adyn.allFinite() || !cache.bdyn.allFinite() ||
+      !cache.k_inf.allFinite() || !cache.p_inf.allFinite() || !cache.quu_inv.allFinite() ||
+      !cache.ambk_t.allFinite() || !cache.apf.allFinite() || !cache.bpf.allFinite())
+  {
+    return false;
+  }
+
+  solver_->work->Adyn = cache.adyn;
+  solver_->work->Bdyn = cache.bdyn;
+  solver_->work->fdyn.setZero();
+
+  solver_->cache->Kinf = cache.k_inf;
+  solver_->cache->Pinf = cache.p_inf;
+  solver_->cache->Quu_inv = cache.quu_inv;
+  solver_->cache->AmBKt = cache.ambk_t;
+  solver_->cache->APf = cache.apf;
+  solver_->cache->BPf = cache.bpf;
+  solver_->cache->C1 = cache.quu_inv;
+  solver_->cache->C2 = cache.ambk_t;
+  return true;
+}
+
 bool TinyMpcController::updateInputBounds(const Eigen::Matrix<double, CONTROL_DIM, 1>& u_min,
                                           const Eigen::Matrix<double, CONTROL_DIM, 1>& u_max)
 {

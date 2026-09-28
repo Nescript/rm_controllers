@@ -47,38 +47,33 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   last_linear_acc_base_x_ = 0.0;
   slip_flag_ = false;
 
-  // Initialize MPC solvers
+  // Initialize continuous 1D LPV MPC solvers.
   if (config_.mpc.enabled)
   {
-    mpc_leg_lengths_ = config_.mpc.leg_lengths;
-    if (mpc_leg_lengths_.empty())
+    if (!std::isfinite(config_.mpc.lpv_nominal_leg_length) || config_.mpc.lpv_nominal_leg_length <= 0.0)
     {
-      mpc_leg_lengths_.push_back(0.2);
+      logger.error("[BipedalWheelCore] Invalid mpc_lpv_nominal_leg_length");
+      return false;
     }
-    for (const double length : mpc_leg_lengths_)
-    {
-      if (!std::isfinite(length) || length <= 0.0)
-      {
-        logger.error("[BipedalWheelCore] Invalid mpc_leg_lengths entry");
-        return false;
-      }
-      Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
-      Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
-      generateAB(config_.model_params, continuous_a, continuous_b, length);
 
-      auto mpc_left = std::make_unique<TinyMpcController>();
-      auto mpc_right = std::make_unique<TinyMpcController>();
-      if (!mpc_left->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc) ||
-          !mpc_right->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc))
-      {
-        logger.error("[BipedalWheelCore] Failed to initialize TinyMPC");
-        return false;
-      }
-      mpc_left_solvers_.push_back(std::move(mpc_left));
-      mpc_right_solvers_.push_back(std::move(mpc_right));
+    Eigen::Matrix<double, STATE_DIM, STATE_DIM> continuous_a{};
+    Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> continuous_b{};
+    generateAB(config_.model_params, continuous_a, continuous_b, config_.mpc.lpv_nominal_leg_length);
+
+    mpc_left_solver_ = std::make_unique<TinyMpcController>();
+    mpc_right_solver_ = std::make_unique<TinyMpcController>();
+    if (!mpc_left_solver_->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc) ||
+        !mpc_right_solver_->init(continuous_a, continuous_b, config_.q, config_.r, config_.mpc))
+    {
+      logger.error("[BipedalWheelCore] Failed to initialize TinyMPC");
+      return false;
     }
-    logger.info("[BipedalWheelCore] TinyMPC initialized for " +
-                std::to_string(mpc_leg_lengths_.size()) + " leg lengths");
+    if (!mpc_lpv_1d_.init(config_.model_params, config_.q, config_.r, config_.mpc))
+    {
+      logger.error("[BipedalWheelCore] Failed to initialize 1D LPV MPC cache");
+      return false;
+    }
+    logger.info("[BipedalWheelCore] 1D LPV TinyMPC initialized");
   }
 
   return true;
@@ -98,10 +93,6 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
     if (robot_mode_ == RobotPhysicalState::FALLEN)
     {
       FSM_variant_ = SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
-    }
-    else if (robot_mode_ == RobotPhysicalState::UNSTABLE_PROTECT)
-    {
-      FSM_variant_ = Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
     }
     else if (robot_mode_ == RobotPhysicalState::GETTING_UP)
     {
@@ -128,8 +119,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
   }
 
   // 3. Dynamically set the active leg PIDs
-  if (std::holds_alternative<Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_) ||
-      std::holds_alternative<Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_))
+  if (std::holds_alternative<Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_))
   {
     active_pid_legs_ = pid_legs_;
   }
@@ -182,7 +172,7 @@ template <typename PidType, typename LoggerType, typename RampFilterType, typena
 void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::reset()
 {
   lqr_status_ = bipedal_wheel_core::LQRStatus{};
-  robot_mode_ = bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT;
+  robot_mode_ = bipedal_wheel_core::RobotPhysicalState::FALLEN;
   complete_stand_ = false;
   overturn_ = false;
   move_flag_ = false;
@@ -307,8 +297,6 @@ FsmState BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilt
           return FsmState::RECOVER;
         else if constexpr (std::is_same_v<T, Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
           return FsmState::UPSTAIRS;
-        else if constexpr (std::is_same_v<T, Protect<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
-          return FsmState::PROTECT;
       },
       FSM_variant_);
 }
@@ -321,25 +309,16 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
     const Eigen::Matrix<double, CONTROL_DIM, 1>& input_max, double vel_min, double vel_max,
     Eigen::Matrix<double, CONTROL_DIM, 1>& control)
 {
-  const auto& solvers = (side == bipedal_wheel_core::LEFT) ? mpc_left_solvers_ : mpc_right_solvers_;
-  if (solvers.empty())
+  auto& solver = (side == bipedal_wheel_core::LEFT) ? mpc_left_solver_ : mpc_right_solver_;
+  if (solver == nullptr || !mpc_lpv_1d_.initialized())
     return false;
 
-  size_t best = 0;
-  double best_dist = std::numeric_limits<double>::max();
-  for (size_t i = 0; i < mpc_leg_lengths_.size(); ++i)
+  ScheduledMpcCache scheduled_cache;
+  if (!mpc_lpv_1d_.evaluate(leg_length, scheduled_cache) || !solver->updateScheduledCache(scheduled_cache) ||
+      !solver->updateInputBounds(input_min, input_max) || !solver->updateVelStateBounds(vel_min, vel_max))
   {
-    const double dist = std::abs(leg_length - mpc_leg_lengths_[i]);
-    if (dist < best_dist)
-    {
-      best_dist = dist;
-      best = i;
-    }
-  }
-  const auto& solver = solvers[best];
-  if (solver == nullptr || !solver->updateInputBounds(input_min, input_max) ||
-      !solver->updateVelStateBounds(vel_min, vel_max))
     return false;
+  }
   return solver->solve(state, reference, control);
 }
 

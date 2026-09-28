@@ -3,6 +3,8 @@
 //
 
 #pragma once
+#include <vector>
+
 #include <Eigen/Dense>
 
 namespace bipedal_wheel_core
@@ -11,8 +13,7 @@ namespace bipedal_wheel_core
 // 机器人状态机枚举
 enum class RobotPhysicalState
 {
-  UNSTABLE_PROTECT = 0,  // 保护状态
-  FALLEN,       // 倾覆/倒地状态
+  FALLEN = 0,  // 倾覆/倒地状态
   GETTING_UP,   // 试图起立中
   STAND         // 平衡站立控制状态
 };
@@ -23,8 +24,7 @@ enum class FsmState
   STAND_UP,
   NORMAL,
   RECOVER,
-  UPSTAIRS,
-  PROTECT
+  UPSTAIRS
 };
 
 // 左右腿枚举
@@ -127,7 +127,26 @@ struct MpcParams
   double rho = 1.0;
   std::vector<double> input_min;
   std::vector<double> input_max;
-  std::vector<double> leg_lengths;
+
+  // 1D LPV scheduling range for leg length. The MPC implementation on this
+  // branch always uses continuous LPV scheduling when enabled.
+  double lpv_leg_min = 0.12;
+  double lpv_leg_max = 0.36;
+  int lpv_sample_count = 31;
+  double lpv_nominal_leg_length = 0.20;
+};
+
+struct ScheduledMpcCache
+{
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> adyn = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
+  Eigen::Matrix<double, STATE_DIM, CONTROL_DIM> bdyn = Eigen::Matrix<double, STATE_DIM, CONTROL_DIM>::Zero();
+  Eigen::Matrix<double, CONTROL_DIM, STATE_DIM> k_inf = Eigen::Matrix<double, CONTROL_DIM, STATE_DIM>::Zero();
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> p_inf = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
+  Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM> quu_inv =
+      Eigen::Matrix<double, CONTROL_DIM, CONTROL_DIM>::Zero();
+  Eigen::Matrix<double, STATE_DIM, STATE_DIM> ambk_t = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
+  Eigen::Matrix<double, STATE_DIM, 1> apf = Eigen::Matrix<double, STATE_DIM, 1>::Zero();
+  Eigen::Matrix<double, CONTROL_DIM, 1> bpf = Eigen::Matrix<double, CONTROL_DIM, 1>::Zero();
 };
 
 struct TorqueLimitParams
@@ -274,7 +293,7 @@ struct DebugData
   double virtual_force = 0.0;
   double virtual_torque = 0.0;
   double lqr_error[6]{};  // 存储状态偏差量以供绘制曲线
-  RobotPhysicalState mode = RobotPhysicalState::UNSTABLE_PROTECT;
+  RobotPhysicalState mode = RobotPhysicalState::FALLEN;
 };
 
 // 算法更新的最终输出包

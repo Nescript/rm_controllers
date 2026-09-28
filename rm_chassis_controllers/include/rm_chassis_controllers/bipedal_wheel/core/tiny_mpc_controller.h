@@ -26,6 +26,8 @@ public:
              const Eigen::Matrix<double, STATE_DIM, 1>& reference,
              Eigen::Matrix<double, CONTROL_DIM, 1>& control);
 
+  bool updateScheduledCache(const ScheduledMpcCache& cache);
+
   // Overwrite the horizon input bounds before solving so joint-space torque
   // limits (mapped through the leg Jacobian) can be enforced every cycle.
   bool updateInputBounds(const Eigen::Matrix<double, CONTROL_DIM, 1>& u_min,

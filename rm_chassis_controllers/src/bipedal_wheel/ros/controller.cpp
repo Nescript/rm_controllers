@@ -303,24 +303,20 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
       mode = 4;
       mode_name = "UPSTAIRS";
       break;
-    case bipedal_wheel_core::FsmState::PROTECT:
-      mode = 5;
-      mode_name = "PROTECT";
-      break;
   }
   logger_.publishChassisMode(mode, mode_name);
 
   // Throttled console print of the balance state, readable amid other log spam
-  static const char* physical_names[] = { "UNSTABLE_PROTECT", "FALLEN", "GETTING_UP", "STAND" };
+  static const char* physical_names[] = { "FALLEN", "GETTING_UP", "STAND" };
   int physical_idx = static_cast<int>(core_.getRobotMode());
-  const char* physical_name = (physical_idx >= 0 && physical_idx < 4) ? physical_names[physical_idx] : "UNKNOWN";
+  const char* physical_name = (physical_idx >= 0 && physical_idx < 3) ? physical_names[physical_idx] : "UNKNOWN";
   ROS_INFO_THROTTLE(1.0, "[balance] FSM: %s | physical: %s | pitch: %.3f | roll: %.3f | overturn: %d",
                     mode_name.c_str(), physical_name, pitch, roll, static_cast<int>(overturn_));
 }
 
 void BipedalController::stopping(const ros::Time& time)
 {
-  core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT);
+  core_.setRobotMode(bipedal_wheel_core::RobotPhysicalState::FALLEN);
   balance_state_changed_ = false;
   bipedal_wheel_core::ControlOutput zero_cmd{};
   setJointCommands(joint_handles_, zero_cmd);
@@ -697,7 +693,10 @@ bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
   params.mpc.rho = controller_nh.param("mpc_rho", 1.0);
   controller_nh.getParam("mpc_input_min", params.mpc.input_min);
   controller_nh.getParam("mpc_input_max", params.mpc.input_max);
-  controller_nh.getParam("mpc_leg_lengths", params.mpc.leg_lengths);
+  params.mpc.lpv_leg_min = controller_nh.param("mpc_lpv_leg_min", 0.12);
+  params.mpc.lpv_leg_max = controller_nh.param("mpc_lpv_leg_max", 0.36);
+  params.mpc.lpv_sample_count = controller_nh.param("mpc_lpv_sample_count", 31);
+  params.mpc.lpv_nominal_leg_length = controller_nh.param("mpc_lpv_nominal_leg_length", 0.20);
 
   // Torque limit parameters
   params.torque_limit.leg_joint_continuous = controller_nh.param("leg_joint_torque_continuous", 20.0);
@@ -747,7 +746,7 @@ void BipedalController::polyfit(
 geometry_msgs::Twist BipedalController::odometry()
 {
   geometry_msgs::Twist twist;
-  if (core_.getRobotMode() != bipedal_wheel_core::RobotPhysicalState::UNSTABLE_PROTECT)
+  if (core_.getRobotMode() == bipedal_wheel_core::RobotPhysicalState::STAND)
   {
     twist.linear.x = core_.getLqrStatus().dx;
     twist.angular.z = last_yaw_vel_;
