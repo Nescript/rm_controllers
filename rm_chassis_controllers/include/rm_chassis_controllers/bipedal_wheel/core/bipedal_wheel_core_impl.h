@@ -25,6 +25,15 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
     return false;
   }
 
+  const auto& brake = config.raw_brake;
+  if (!std::isfinite(brake.speed_threshold) || brake.speed_threshold <= 0.0 ||
+      !std::isfinite(brake.hold_time) || brake.hold_time <= 0.0 ||
+      !std::isfinite(brake.timeout) || brake.timeout <= brake.hold_time)
+  {
+    logger.error("[BipedalWheelCore] Invalid RAW brake configuration");
+    return false;
+  }
+
   // Construct left and right VMC solvers
   left_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
   right_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
@@ -129,6 +138,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
   }
 
   // 4. Create context for state execution
+  raw_ready_ = false;  // Non-NORMAL states must not acknowledge RAW rotation.
   ControlOutput control_output{};
   FsmContext<PidType, LoggerType, RampFilterType, MovingAverageFilterType> ctx{ config_,
                                                                                 sens_in,
@@ -141,6 +151,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
                                                                                 move_flag_,
                                                                                 balance_state_changed_,
                                                                                 recovery_leg_spd_turnback_,
+                                                                                raw_ready_,
                                                                                 left_vmc_.get(),
                                                                                 right_vmc_.get(),
                                                                                 dt,
@@ -178,6 +189,7 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   move_flag_ = false;
   balance_state_changed_ = false;
   recovery_leg_spd_turnback_ = false;
+  raw_ready_ = false;
   last_linear_acc_base_x_ = 0.0;
   slip_flag_ = false;
   kalman_filter_.init(0.0);
@@ -268,9 +280,13 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   // 5. Update estimated state
   overturn_ = cmd_in.overturn;
 
-  lqr_status_.dx = (cmd_in.base_state != 1) ? x_hat(0) : 0.0;  // base_state 1 is RAW
+  // RAW_BRAKE needs the actual estimated speed; do not mask it in RAW.
+  lqr_status_.dx = x_hat(0);
 
-  if (cmd_in.base_state != 1 && std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01)
+  // RAW_BRAKE and RAW need the same longitudinal position feedback as FOLLOW.
+  // RAW always has a zero forward-speed reference, regardless of the incoming manual command.
+  if (cmd_in.base_state == 1 ||
+      (std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01))
   {
     lqr_status_.x += lqr_status_.dx * dt;
   }
