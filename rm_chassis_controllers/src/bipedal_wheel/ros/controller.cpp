@@ -61,7 +61,6 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw,
   return true;
 }
 
-/********************************** 应该移动到 .h 文件 ***********************************/
 inline void quatToRPY(const geometry_msgs::Quaternion& q, double& roll, double& pitch, double& yaw)
 {
   double as = std::min(-2. * (q.x * q.z - q.w * q.y), .99999);
@@ -76,7 +75,6 @@ inline void setJointCommands(std::vector<hardware_interface::JointHandle*>& join
   if (joints.size() != 6)
     throw std::runtime_error("Joint handle vector size must be 6!");
 
-  // 关节顺序在 initHardwareHandles 中初始化为:
   // left_hip, left_knee, right_hip, right_knee, left_wheel, right_wheel
   joints[0]->setCommand(ctrl_out.leg_cmd[bipedal_wheel_core::LEFT].hip.effort);
   joints[1]->setCommand(ctrl_out.leg_cmd[bipedal_wheel_core::LEFT].knee.effort);
@@ -245,6 +243,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   core_.setRecoveryLegSpdTurnback(recovery_leg_spd_turnback_);
 
   bipedal_wheel_core::ControlOutput ctrl_out = core_.update(dt, sens_in, cmd_in);
+  logger_.publishRawReady(core_.getRawReady());
 
   // 7. 回收状态机运行结果
   complete_stand_ = core_.getCompleteStand();
@@ -639,7 +638,6 @@ bool BipedalController::setupSpringParams(ros::NodeHandle& controller_nh)
 
 bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
 {
-  // 1. Initialize wrappers
   pid_wrapper_yaw_vel_.setPid(&pid_yaw_vel_);
   pid_wrapper_theta_diff_.setPid(&pid_theta_diff_);
   pid_wrapper_roll_.setPid(&pid_roll_);
@@ -655,10 +653,10 @@ bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
   pid_wrapper_left_leg_theta_vel_.setPid(&pid_left_leg_theta_vel_);
   pid_wrapper_right_leg_theta_vel_.setPid(&pid_right_leg_theta_vel_);
 
+  // Remove if not needed. Previously used for fallback in Protect mode PID control.
   pid_wrapper_left_wheel_vel_.setPid(&pid_left_wheel_vel_);
   pid_wrapper_right_wheel_vel_.setPid(&pid_right_wheel_vel_);
 
-  // 2. Populate wrapper vectors
   pid_wrappers_legs_ = { &pid_wrapper_left_leg_, &pid_wrapper_right_leg_ };
   pid_wrappers_legs_stand_up_ = { &pid_wrapper_left_leg_stand_up_, &pid_wrapper_right_leg_stand_up_ };
 
@@ -667,7 +665,7 @@ bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
 
   pid_wrappers_wheels_ = { &pid_wrapper_left_wheel_vel_, &pid_wrapper_right_wheel_vel_ };
 
-  // 3. Assemble parameters
+  // Assemble parameters
   bipedal_wheel_core::ControllerParams params{};
   if (model_params_)
     params.model_params = *model_params_;
@@ -698,25 +696,15 @@ bool BipedalController::initCoreAlgorithm(ros::NodeHandle& controller_nh)
   params.mpc.lpv_sample_count = controller_nh.param("mpc_lpv_sample_count", 31);
   params.mpc.lpv_nominal_leg_length = controller_nh.param("mpc_lpv_nominal_leg_length", 0.20);
 
-  // Torque limit parameters
-  params.torque_limit.leg_joint_continuous = controller_nh.param("leg_joint_torque_continuous", 20.0);
-  params.torque_limit.leg_joint_peak = controller_nh.param("leg_joint_torque_peak", 40.0);
-  const double wheel_motor_continuous = controller_nh.param("wheel_motor_torque_continuous", 2.8);
-  const double wheel_motor_peak = controller_nh.param("wheel_motor_torque_peak", 5.0);
-  const double wheel_reference_reduction = controller_nh.param("wheel_reference_reduction", 16.0);
-  const double wheel_urdf_reduction = std::abs(controller_nh.param("wheel_urdf_reduction", 258.0 / 17.0));
-  const double wheel_efficiency = controller_nh.param("wheel_transmission_efficiency", 1.0);
-  params.torque_limit.enable_peak = controller_nh.param("enable_peak_torque", false);
-  const double output_scale = wheel_urdf_reduction / wheel_reference_reduction * wheel_efficiency;
-  params.torque_limit.wheel_joint_continuous = wheel_motor_continuous * output_scale;
-  params.torque_limit.wheel_joint_peak = wheel_motor_peak * output_scale;
-
   // Rollover constraint parameters
   params.rollover.margin = controller_nh.param("rollover_margin", 0.7);
   params.rollover.min_yaw_rate = controller_nh.param("rollover_min_yaw_rate", 0.5);
   params.rollover.enabled = controller_nh.param("rollover_constraint_enabled", true);
+  params.raw_brake.speed_threshold = controller_nh.param("raw_brake_speed_threshold", 0.08);
+  params.raw_brake.hold_time = controller_nh.param("raw_brake_hold_time", 0.2);
+  params.raw_brake.timeout = controller_nh.param("raw_brake_timeout", 3.0);
 
-  // 4. Initialize core algorithm
+  // Initialize core algorithm
   logger_.init(controller_nh);
   if (!core_.init(params, logger_, pid_wrappers_legs_, pid_wrappers_legs_stand_up_, pid_wrappers_thetas_,
                   pid_wrappers_wheels_, &pid_wrapper_yaw_vel_, &pid_wrapper_theta_diff_, &pid_wrapper_roll_,

@@ -61,8 +61,10 @@ bool TinyMpcController::init(const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& 
   {
     for (int input = 0; input < CONTROL_DIM; ++input)
     {
-      u_min(input, step) = params.input_min[input];
-      u_max(input, step) = params.input_max[input];
+      // The second YAML value is a joint motor limit, not a virtual leg torque.
+      // Normal updates this input using the current VMC Jacobian before solving.
+      u_min(input, step) = input == LEG_Tp ? -1e17 : params.input_min[input];
+      u_max(input, step) = input == LEG_Tp ? 1e17 : params.input_max[input];
     }
   }
   if (tiny_set_bound_constraints(solver_, x_min, x_max, u_min, u_max) != 0)

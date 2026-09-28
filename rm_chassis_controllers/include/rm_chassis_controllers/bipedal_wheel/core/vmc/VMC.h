@@ -68,6 +68,11 @@ public:
    */
   void leg_conv(double F, double Tp, double T[2]);
 
+  // Find the virtual pitch torque interval that keeps both joint motors within
+  // [joint_min, joint_max] after adding the radial force and pitch correction.
+  bool leg_torque_bounds(double F, double pitch_correction, double joint_min, double joint_max, double& tp_min,
+                         double& tp_max) const;
+
   /**
    * @brief Convert joint torques back to Cartesian/Virtual forces.
    *

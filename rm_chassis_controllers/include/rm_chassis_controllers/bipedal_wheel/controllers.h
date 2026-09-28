@@ -40,10 +40,6 @@ public:
   {
     if (!pid_)
       return 0.0;
-    // First call after (re)start: suppress the derivative kick (control_toolbox would
-    // compute d_term = d * error/dt against a zero-initialized error_dot, which slams
-    // the closed-chain joints against their loop constraints and starts a ringing
-    // limit cycle).
     if (first_call_)
     {
       first_call_ = false;
@@ -78,6 +74,7 @@ public:
     legged_chassis_status_pub_ = std::make_shared<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>>(nh, "legged_chassis_status", 1);
     legged_chassis_mode_pub_ = std::make_shared<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>>(nh, "legged_chassis_mode", 1);
     lqr_status_pub_ = std::make_shared<realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>>(nh, "lqr_status", 1);
+    raw_ready_pub_ = std::make_shared<realtime_tools::RealtimePublisher<std_msgs::Bool>>(nh, "raw_ready", 1);
     debugPub_ = std::make_shared<DebugDataPublisher>(nh, "debug_data");
   }
   void info(const std::string& msg)
@@ -172,6 +169,15 @@ public:
     }
   }
 
+  void publishRawReady(bool ready)
+  {
+    if (raw_ready_pub_ && raw_ready_pub_->trylock())
+    {
+      raw_ready_pub_->msg_.data = ready;
+      raw_ready_pub_->unlockAndPublish();
+    }
+  }
+
   void publishUnstick(bool unstick)
   {
     std_msgs::Bool msg;
@@ -204,6 +210,7 @@ private:
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>> legged_chassis_status_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>> legged_chassis_mode_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>> lqr_status_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Bool>> raw_ready_pub_;
   std::shared_ptr<DebugDataPublisher> debugPub_;
 };
 
@@ -217,18 +224,13 @@ public:
   void stopping(const ros::Time& time) override;
   geometry_msgs::Twist odometry() override;
 
-  // init Methods which use in init
   bool initParams(ros::NodeHandle& controller_nh);
-
   bool initRosInterface(ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh);
-
   bool initHardwareHandles(hardware_interface::RobotHW* robot_hw);
-
   bool initCoreAlgorithm(ros::NodeHandle& controller_nh);
-
+  // TODO implement MPC reconfig
   void lqrReconfigCB(rm_chassis_controllers::LQRWeightConfig& config, uint32_t level);
 
-  // setup Methods which use while initParams
   bool setupLQR(ros::NodeHandle& controller_nh);
   bool setupModelParams(ros::NodeHandle& controller_nh);
   bool setupControlParams(ros::NodeHandle& controller_nh);
@@ -260,10 +262,9 @@ public:
   double knee_offset_ = 0.0;  // added to raw knee handle to get VMC phi4 (0 for standard five-bar)
   double hip_offset_ = 3.141592653589793;  // added to raw hip handle to get VMC phi1; unset (<-100) -> five_link ? M_PI : M_PI_2
 
-  // TF cache for IMU <-> base_link static transform
   bool is_tf_cached_ = false;
-  tf2::Transform imu2base_tf_;  // IMU -> base_link
-  tf2::Transform base2imu_tf_;  // base_link -> IMU
+  tf2::Transform imu2base_tf_;
+  tf2::Transform base2imu_tf_;
 
   // LQR weights & coefficients
   Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> q_;

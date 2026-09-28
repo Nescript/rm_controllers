@@ -1,5 +1,6 @@
 #include "bipedal_wheel/core/vmc/VMC.h"
 #include "bipedal_wheel/core/fsm/jump_contact_detector.h"
+#include "bipedal_wheel/core/fsm/jump_control_policy.h"
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
@@ -70,6 +71,39 @@ TEST(BipedalWheelVmc, VirtualForceRoundTripAndPower)
       EXPECT_NEAR(torques[0] * 0.3 + torques[1] * -0.7,
                   force[0] * vmc.getSpd().dL0 + force[1] * vmc.getSpd().dTheta, 1e-10);
     }
+  }
+}
+
+TEST(BipedalWheelVmc, JointTorqueBoundsMatchConvertedMotorCommands)
+{
+  for (bool five_bar : { false, true })
+  {
+    VMC vmc(kL1, kL2, kL2, kL1, 0.0, five_bar);
+    vmc.calc_jacobian(2.7, 0.4);
+    constexpr double force = 50.0;
+    constexpr double pitch_correction = 2.0;
+    double lower, upper;
+    ASSERT_TRUE(vmc.leg_torque_bounds(force, pitch_correction, -40.0, 40.0, lower, upper));
+    ASSERT_LT(lower, upper);
+    for (double pitch_torque : { lower, (lower + upper) / 2.0, upper })
+    {
+      double motor_torques[2];
+      vmc.leg_conv(force, pitch_torque + pitch_correction, motor_torques);
+      for (double torque : motor_torques)
+      {
+        EXPECT_GE(torque, -40.0 - 1e-9);
+        EXPECT_LE(torque, 40.0 + 1e-9);
+      }
+    }
+
+    double motor_torques[2];
+    vmc.leg_conv(force, lower - 1.0 + pitch_correction, motor_torques);
+    EXPECT_TRUE(motor_torques[0] < -40.0 || motor_torques[0] > 40.0 || motor_torques[1] < -40.0 ||
+                motor_torques[1] > 40.0);
+    vmc.leg_conv(force, upper + 1.0 + pitch_correction, motor_torques);
+    EXPECT_TRUE(motor_torques[0] < -40.0 || motor_torques[0] > 40.0 || motor_torques[1] < -40.0 ||
+                motor_torques[1] > 40.0);
+    EXPECT_FALSE(vmc.leg_torque_bounds(1e6, pitch_correction, -40.0, 40.0, lower, upper));
   }
 }
 
@@ -147,6 +181,7 @@ TEST(BipedalWheelJump, JumpContactDetectorFlightAndLanding)
   }
   // 5th step (10 ms): airborne confirmed, but still in flight
   EXPECT_FALSE(detector.update(5.0, 5.0, unstick_threshold, dt));
+  EXPECT_TRUE(detector.isAirborne());
 
   // 3. In mid-air, a temporary force spike below (unstick_threshold + 5.0) (e.g. 18 N) does NOT trigger landing
   EXPECT_FALSE(detector.update(18.0, 5.0, unstick_threshold, dt));
@@ -162,7 +197,42 @@ TEST(BipedalWheelJump, JumpContactDetectorFlightAndLanding)
 
   // 5. Reset clears state: now ground force again returns false
   detector.reset();
+  EXPECT_FALSE(detector.isAirborne());
   EXPECT_FALSE(detector.update(30.0, 30.0, unstick_threshold, dt));
+}
+
+TEST(BipedalWheelJump, OnlyLegAngleFeedbackInConfirmedFlight)
+{
+  using namespace bipedal_wheel_core;
+  Eigen::Matrix<double, STATE_DIM, 1> error;
+  error << 1, 2, 3, 4, 5, 6;
+  const auto original = error;
+
+  maskJumpFeedback(error, JumpPhase::IDLE, false);
+  EXPECT_TRUE(error.isApprox(original));
+
+  maskJumpFeedback(error, JumpPhase::LEG_RETRACTION, false);
+  EXPECT_DOUBLE_EQ(error(POS), 0.0);
+  EXPECT_DOUBLE_EQ(error(VEL), 0.0);
+  EXPECT_DOUBLE_EQ(error(PITCH), 5.0);
+
+  error = original;
+  maskJumpFeedback(error, JumpPhase::JUMP_UP, false);
+  EXPECT_DOUBLE_EQ(error(THETA), 1.0);
+  EXPECT_DOUBLE_EQ(error(D_THETA), 2.0);
+  EXPECT_DOUBLE_EQ(error(POS), 0.0);
+  EXPECT_DOUBLE_EQ(error(VEL), 0.0);
+  EXPECT_DOUBLE_EQ(error(PITCH), 5.0);
+  EXPECT_DOUBLE_EQ(error(D_PITCH), 6.0);
+
+  for (const auto phase : { JumpPhase::JUMP_UP, JumpPhase::OFF_GROUND })
+  {
+    error = original;
+    maskJumpFeedback(error, phase, true);
+    EXPECT_DOUBLE_EQ(error(THETA), 1.0);
+    EXPECT_DOUBLE_EQ(error(D_THETA), 2.0);
+    EXPECT_TRUE(error.tail<4>().isZero());
+  }
 }
 }  // namespace
 

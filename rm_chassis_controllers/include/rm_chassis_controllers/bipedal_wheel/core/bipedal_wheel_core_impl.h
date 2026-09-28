@@ -34,6 +34,23 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
     return false;
   }
 
+  const auto& input_min = config.mpc.input_min;
+  const auto& input_max = config.mpc.input_max;
+  if (input_min.size() != CONTROL_DIM || input_max.size() != CONTROL_DIM)
+  {
+    logger.error("[BipedalWheelCore] mpc_input_min/max must each have two values");
+    return false;
+  }
+  for (int input = 0; input < CONTROL_DIM; ++input)
+  {
+    if (!std::isfinite(input_min[input]) || !std::isfinite(input_max[input]) ||
+        input_min[input] >= 0.0 || input_max[input] <= 0.0)
+    {
+      logger.error("[BipedalWheelCore] Invalid mpc_input_min/max torque bounds");
+      return false;
+    }
+  }
+
   // Construct left and right VMC solvers
   left_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
   right_vmc_ = std::make_unique<VMC>(params.l1, params.l2, params.l3, params.l4, params.l5, params.five_link);
@@ -280,13 +297,17 @@ void BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   // 5. Update estimated state
   overturn_ = cmd_in.overturn;
 
-  // RAW_BRAKE needs the actual estimated speed; do not mask it in RAW.
-  lqr_status_.dx = x_hat(0);
+  // A/B experiment: do not feed the slow Kalman velocity into RAW balance.
+  // RAW_BRAKE checks unfiltered wheel/leg velocity separately before allowing yaw.
+  lqr_status_.dx = cmd_in.base_state == 1 ? 0.0 : x_hat(0);
 
-  // RAW_BRAKE and RAW need the same longitudinal position feedback as FOLLOW.
-  // RAW always has a zero forward-speed reference, regardless of the incoming manual command.
-  if (cmd_in.base_state == 1 ||
-      (std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01))
+  // A/B experiment: keep measured RAW speed for braking, but remove accumulated
+  // longitudinal position feedback in RAW. FOLLOW estimation is unchanged.
+  if (cmd_in.base_state == 1)
+  {
+    lqr_status_.x = 0.0;
+  }
+  else if (std::abs(lqr_status_.dx) <= 0.5 && std::abs(cmd_in.vel_cmd.x()) <= 0.01)
   {
     lqr_status_.x += lqr_status_.dx * dt;
   }

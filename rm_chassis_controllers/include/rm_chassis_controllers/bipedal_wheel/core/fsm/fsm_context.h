@@ -28,6 +28,7 @@ struct FsmContext
   bool& move_flag;
   bool& balance_state_changed;
   bool& recovery_leg_spd_turnback;
+  bool& raw_ready;
 
   // VMC Kinematic Solvers
   VMC* left_vmc = nullptr;

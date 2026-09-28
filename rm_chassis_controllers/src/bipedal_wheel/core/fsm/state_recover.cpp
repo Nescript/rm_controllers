@@ -44,7 +44,7 @@ void Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   leg_theta_diff_ = shortest_angular_distance(left_pos.theta, right_pos.theta);
   double T_theta_diff = 0.0, feedforward_force = 0.0;
 
-  if (ctx.cmd_in.base_state != 4 && detectd_flag_)  // base_state 4 corresponds to PROTECT/SITDOWN/etc.
+  if (ctx.cmd_in.base_state != 4 && detectd_flag_)  // base_state 4 is RECOVERY
   {
     double left_force =
         ctx.pid_legs[0]->computeCommand(desired_leg_length_ - left_pos.L0, ctx.dt) + feedforward_force;

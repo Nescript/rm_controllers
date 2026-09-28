@@ -36,7 +36,11 @@ private:
   double unstick_threshold = 15.0;
   JumpPhase jump_phase_ = JumpPhase::IDLE;
   int jumpTime_ = 0;
-  bool x_offset_flag_ = false, protect_flag_ = false;
+  bool x_offset_flag_ = false;
+  bool was_raw_ = false;
+  bool raw_brake_ready_ = false;
+  bool raw_brake_timed_out_ = false;
+  double raw_brake_elapsed_ = 0.0, raw_brake_hold_elapsed_ = 0.0, raw_brake_length_ = 0.2;
   double jump_cooldown_counter_ = 0.0;
   double off_ground_timer_ = 0.0;
   JumpContactDetector jump_contact_detector_{};

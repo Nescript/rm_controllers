@@ -60,6 +60,8 @@ public:
   { return balance_state_changed_; }
   bool getRecoveryLegSpdTurnback() const
   { return recovery_leg_spd_turnback_; }
+  bool getRawReady() const
+  { return raw_ready_; }
 
   // MPC solving interface for normal mode
   bool solveMpc(LegIndex side, double leg_length, const Eigen::Matrix<double, STATE_DIM, 1>& state,
@@ -93,6 +95,7 @@ private:
   bool move_flag_ = false;
   bool balance_state_changed_ = false;
   bool recovery_leg_spd_turnback_ = false;
+  bool raw_ready_ = false;
 
   // Injected component pointers/references cached during initialization
   LoggerType* logger_ = nullptr;

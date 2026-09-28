@@ -10,12 +10,11 @@
 namespace bipedal_wheel_core
 {
 
-// 机器人状态机枚举
 enum class RobotPhysicalState
 {
-  FALLEN = 0,  // 倾覆/倒地状态
-  GETTING_UP,   // 试图起立中
-  STAND         // 平衡站立控制状态
+  FALLEN = 0,
+  GETTING_UP,
+  STAND
 };
 
 enum class FsmState
@@ -125,6 +124,8 @@ struct MpcParams
   int max_iter = 50;
   double dt = 0.01;
   double rho = 1.0;
+  // [wheel joint torque, each leg joint motor torque]. The leg joint bounds
+  // are converted through the current VMC Jacobian before each MPC solve.
   std::vector<double> input_min;
   std::vector<double> input_max;
 
@@ -149,13 +150,11 @@ struct ScheduledMpcCache
   Eigen::Matrix<double, CONTROL_DIM, 1> bpf = Eigen::Matrix<double, CONTROL_DIM, 1>::Zero();
 };
 
-struct TorqueLimitParams
+struct RawBrakeParams
 {
-  double leg_joint_continuous = 20.0;
-  double leg_joint_peak = 40.0;
-  double wheel_joint_continuous = 2.8;
-  double wheel_joint_peak = 5.0;
-  bool enable_peak = false;
+  double speed_threshold = 0.08;   // m/s
+  double hold_time = 0.2;         // s below threshold before yaw is enabled
+  double timeout = 3.0;           // s; timeout never enables yaw
 };
 
 struct RolloverParams
@@ -200,8 +199,8 @@ struct ControllerParams
   BiasParams bias{};
   LegStateThresholdParams threshold{};
   MpcParams mpc{};
-  TorqueLimitParams torque_limit{};
   RolloverParams rollover{};
+  RawBrakeParams raw_brake{};
 
   double default_leg_length = 0.12;
 

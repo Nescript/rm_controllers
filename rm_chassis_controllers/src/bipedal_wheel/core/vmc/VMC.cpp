@@ -3,6 +3,8 @@
 //
 
 #include "bipedal_wheel/core/vmc/VMC.h"
+#include <algorithm>
+#include <cmath>
 #include <math.h>
 
 namespace bipedal_wheel_core
@@ -67,6 +69,34 @@ void VMC::leg_conv(double F, double Tp, double* T)
   // J^T * [F; Tp]
   T[0] = J_[0][0] * F + J_[1][0] * Tp;
   T[1] = J_[0][1] * F + J_[1][1] * Tp;
+}
+
+bool VMC::leg_torque_bounds(double F, double pitch_correction, double joint_min, double joint_max, double& tp_min,
+                            double& tp_max) const
+{
+  tp_min = -1e17;
+  tp_max = 1e17;
+  if (!std::isfinite(F) || !std::isfinite(pitch_correction))
+    return false;
+
+  for (int joint = 0; joint < 2; ++joint)
+  {
+    const double angular = J_[1][joint];
+    const double base = J_[0][joint] * F + angular * pitch_correction;
+    if (!std::isfinite(base) || !std::isfinite(angular))
+      return false;
+    if (std::abs(angular) <= 1e-6)
+    {
+      if (base < joint_min || base > joint_max)
+        return false;
+      continue;
+    }
+    const double bound1 = (joint_min - base) / angular;
+    const double bound2 = (joint_max - base) / angular;
+    tp_min = std::max(tp_min, std::min(bound1, bound2));
+    tp_max = std::min(tp_max, std::max(bound1, bound2));
+  }
+  return std::isfinite(tp_min) && std::isfinite(tp_max) && tp_min <= tp_max;
 }
 
 void VMC::calc_jacobian(double phi1, double phi4)
