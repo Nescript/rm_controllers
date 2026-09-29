@@ -331,7 +331,7 @@ FsmState BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilt
         else if constexpr (std::is_same_v<T, Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
           return FsmState::NORMAL;
         else if constexpr (std::is_same_v<T, Recover<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
-          return FsmState::RECOVER;
+          return FsmState::RECOVERY;
         else if constexpr (std::is_same_v<T, Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>)
           return FsmState::UPSTAIRS;
       },

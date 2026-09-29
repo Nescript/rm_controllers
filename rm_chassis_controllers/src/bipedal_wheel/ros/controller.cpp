@@ -44,7 +44,7 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw,
       boost::bind(&BipedalController::lqrReconfigCB, this, _1, _2);
   lqr_reconfig_srv_->setCallback(cb);
 
-  // Cache static TF at init time if available
+  // Cache IMU2base tf
   try
   {
     geometry_msgs::TransformStamped tf_msg;
@@ -107,7 +107,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   acc.x = imu_handle_.getLinearAcceleration()[0];
   acc.y = imu_handle_.getLinearAcceleration()[1];
   acc.z = imu_handle_.getLinearAcceleration()[2];
-  tf2::Transform odom2imu, imu2base, odom2base;
+  tf2::Transform imu2odom, base2imu, base2odom;
   geometry_msgs::Vector3 angular_vel_base{}, linear_acc_base{};
   double roll{}, pitch{}, yaw{};
 
@@ -135,38 +135,37 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
 
   try
   {
-    // transfor imu date to base link
-    tf2::Vector3 gyro_tf2(gyro.x, gyro.y, gyro.z);
-    tf2::Vector3 angular_vel_base_tf2 = imu2base_tf_ * gyro_tf2;
+    // Angular velocity needs the IMU-to-base rotation, not the IMU position offset.
+    const tf2::Vector3 gyro_tf2(gyro.x, gyro.y, gyro.z);
+    const tf2::Vector3 angular_vel_base_tf2 = imu2base_tf_.getBasis() * gyro_tf2;
     angular_vel_base.x = angular_vel_base_tf2.x();
     angular_vel_base.y = angular_vel_base_tf2.y();
     angular_vel_base.z = angular_vel_base_tf2.z();
 
     // get imu to base transform
-    imu2base = base2imu_tf_;
+    base2imu = base2imu_tf_;
 
     // get odom to imu transform
-    tf2::Quaternion odom2imu_quaternion;
-    tf2::Vector3 odom2imu_origin;
-    odom2imu_quaternion.setValue(imu_handle_.getOrientation()[0], imu_handle_.getOrientation()[1],
+    tf2::Quaternion imu2odom_quaternion;
+    tf2::Vector3 zero_origin;
+    imu2odom_quaternion.setValue(imu_handle_.getOrientation()[0], imu_handle_.getOrientation()[1],
                                  imu_handle_.getOrientation()[2], imu_handle_.getOrientation()[3]);
-    odom2imu_origin.setValue(0, 0, 0);
-    odom2imu.setOrigin(odom2imu_origin);
-    odom2imu.setRotation(odom2imu_quaternion);
-    odom2base = odom2imu * imu2base;
-    quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
+    zero_origin.setValue(0, 0, 0);
+    imu2odom.setOrigin(zero_origin);
+    imu2odom.setRotation(imu2odom_quaternion);
+    base2odom = base2imu * imu2odom;
+    quatToRPY(toMsg(base2odom).rotation, roll, pitch, yaw);
 
-    // Auto-detect overturn: body z-axis pointing down in world frame
+    // Overturn detection: body z-axis pointing down in world frame
     tf2::Vector3 z_body(0, 0, 1);
-    tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
-    overturn_ = (std::abs(pitch) > 0.65 || std::abs(roll) > 0.8) && z_world.z() < 0.0;
+    tf2::Vector3 z_odom = tf2::quatRotate(base2odom.getRotation(), z_body);
+    overturn_ = (std::abs(pitch) > 0.65 || std::abs(roll) > 0.8) && z_odom.z() < 0.0;
 
     geometry_msgs::TransformStamped tf_msg;
-    tf_msg.transform = tf2::toMsg(odom2imu.inverse());
+    tf_msg.transform = tf2::toMsg(imu2odom.inverse());
     tf_msg.header.stamp = time;
     tf2::doTransform(acc, linear_acc_base, tf_msg);
 
-    // 打包底盘传感器数据
     sens_in.chassis_state.angular_vel << angular_vel_base.x, angular_vel_base.y, angular_vel_base.z;
     sens_in.chassis_state.linear_acc << linear_acc_base.x, linear_acc_base.y, linear_acc_base.z;
     sens_in.chassis_state.roll = roll;
@@ -183,7 +182,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     return;
   }
 
-  // 2. 打包左腿关节状态 (hip, knee, wheel)
+  // Packing leg state
   sens_in.leg_state[bipedal_wheel_core::LEFT].hip.position =
       left_hip_joint_handle_.getPosition() + hip_offset_;
   sens_in.leg_state[bipedal_wheel_core::LEFT].hip.vel = left_hip_joint_handle_.getVelocity();
@@ -196,8 +195,6 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.position = left_wheel_joint_handle_.getPosition();
   sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.vel = left_wheel_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::LEFT].wheel.effort = left_wheel_joint_handle_.getEffort();
-
-  // 3. 打包右腿关节状态 (hip, knee, wheel)
   sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.position =
       right_hip_joint_handle_.getPosition() + hip_offset_;
   sens_in.leg_state[bipedal_wheel_core::RIGHT].hip.vel = right_hip_joint_handle_.getVelocity();
@@ -207,12 +204,12 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.vel = right_knee_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::RIGHT].knee.effort = right_knee_joint_handle_.getEffort();
 
-  // 4. 打包右腿车轮状态
+  // Packing wheel state
   sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.position = right_wheel_joint_handle_.getPosition();
   sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.vel = right_wheel_joint_handle_.getVelocity();
   sens_in.leg_state[bipedal_wheel_core::RIGHT].wheel.effort = right_wheel_joint_handle_.getEffort();
 
-  // 5. 组装输入指令 commands
+  // Packing command input
   bipedal_wheel_core::ControllerCommands cmd_in{};
   cmd_in.vel_cmd << vel_cmd_.x, vel_cmd_.y, vel_cmd_.z;
   cmd_in.leg_length_cmd = leg_length_cmd_;
@@ -235,7 +232,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   else
     cmd_in.base_state = 0;
 
-  // 6. 传入时间步长 dt 与传感器测量，运行核心算法
+  // Inject dt,sens and cmd input to core
   double dt = period.toSec();
   core_.setCompleteStand(complete_stand_);
   core_.setOverturn(overturn_);
@@ -245,7 +242,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   bipedal_wheel_core::ControlOutput ctrl_out = core_.update(dt, sens_in, cmd_in);
   logger_.publishRawReady(core_.getRawReady());
 
-  // 7. 回收状态机运行结果
+  // Get core state and output
   complete_stand_ = core_.getCompleteStand();
   overturn_ = core_.getOverturn();
   balance_state_changed_ = core_.getBalanceStateChanged();
@@ -255,10 +252,10 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     jump_cmd_ = false;
   }
 
-  // 8. 将输出控制量应用给电机
+  // Apply cmd to joint
   setJointCommands(joint_handles_, ctrl_out);
 
-  // 9. 发布常规遥测数据
+  // Publish chassis status
   const auto* left_vmc = core_.getLeftVmc();
   const auto* right_vmc = core_.getRightVmc();
   if (left_vmc && right_vmc)
@@ -283,34 +280,35 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   switch (core_.getFsmState())
   {
     case bipedal_wheel_core::FsmState::NORMAL:
-      mode = 0;
+      mode = rm_msgs::LeggedChassisMode::NORMAL;
       mode_name = "NORMAL";
       break;
     case bipedal_wheel_core::FsmState::STAND_UP:
-      mode = 1;
+      mode = rm_msgs::LeggedChassisMode::STAND_UP;
       mode_name = "STAND_UP";
       break;
     case bipedal_wheel_core::FsmState::SIT_DOWN:
-      mode = 2;
+      mode = rm_msgs::LeggedChassisMode::SIT_DOWN;
       mode_name = "SIT_DOWN";
       break;
-    case bipedal_wheel_core::FsmState::RECOVER:
-      mode = 3;
-      mode_name = "RECOVER";
+    case bipedal_wheel_core::FsmState::RECOVERY:
+      mode = rm_msgs::LeggedChassisMode::RECOVERY;
+      mode_name = "RECOVERY";
       break;
     case bipedal_wheel_core::FsmState::UPSTAIRS:
-      mode = 4;
+      mode = rm_msgs::LeggedChassisMode::UPSTAIRS;
       mode_name = "UPSTAIRS";
       break;
   }
   logger_.publishChassisMode(mode, mode_name);
 
-  // Throttled console print of the balance state, readable amid other log spam
+  /*
   static const char* physical_names[] = { "FALLEN", "GETTING_UP", "STAND" };
   int physical_idx = static_cast<int>(core_.getRobotMode());
   const char* physical_name = (physical_idx >= 0 && physical_idx < 3) ? physical_names[physical_idx] : "UNKNOWN";
   ROS_INFO_THROTTLE(1.0, "[balance] FSM: %s | physical: %s | pitch: %.3f | roll: %.3f | overturn: %d",
                     mode_name.c_str(), physical_name, pitch, roll, static_cast<int>(overturn_));
+  */
 }
 
 void BipedalController::stopping(const ros::Time& time)
@@ -320,7 +318,7 @@ void BipedalController::stopping(const ros::Time& time)
   bipedal_wheel_core::ControlOutput zero_cmd{};
   setJointCommands(joint_handles_, zero_cmd);
 
-  ROS_INFO("[balance] Controller Stop");
+  ROS_INFO("[BipedalController] Controller Stop");
 }
 
 /**
@@ -525,7 +523,6 @@ bool BipedalController::setupLQR(ros::NodeHandle& controller_nh)
   q_.diagonal() = q_diag;
   r_.diagonal() = r_diag;
 
-  // Continuous model \dot{x} = A x + B u
   std::vector<double> lengths;
   std::vector<Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::STATE_DIM>> ks;
   for (int i = 10; i < 40; i++)

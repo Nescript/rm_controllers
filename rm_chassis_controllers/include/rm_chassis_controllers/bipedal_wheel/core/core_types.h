@@ -22,7 +22,7 @@ enum class FsmState
   SIT_DOWN,
   STAND_UP,
   NORMAL,
-  RECOVER,
+  RECOVERY,
   UPSTAIRS
 };
 
