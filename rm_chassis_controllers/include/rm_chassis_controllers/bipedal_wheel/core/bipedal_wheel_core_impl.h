@@ -184,6 +184,10 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
 
   // 5. Run active state
   std::visit([&ctx](auto& state) { state.execute(ctx); }, FSM_variant_);
+  if (!std::holds_alternative<Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_))
+  {
+    logger_->publishUnstick(false);
+  }
 
   // 6. Update core's member variables from the context
   robot_mode_ = ctx.current_physical_state;

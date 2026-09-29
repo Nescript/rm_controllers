@@ -115,6 +115,7 @@ struct ControlParams
   double down5cmStairThetaThreshold = 0.2;
   double jump_up_force = 210.0;
   double off_ground_force = 90.0;
+  double jump_joint_effort_limit = 0.0;  // 0: use the normal joint effort bound
 };
 
 struct MpcParams
@@ -217,6 +218,7 @@ struct ControllerCommands
   double leg_length_cmd = 0.12;
   bool overturn = false;
   const Eigen::Matrix<double, 4, 12>* coeffs = nullptr;
+  const Eigen::Matrix<double, 4, 12>* jump_coeffs = nullptr;
   double power_limit = 120.0;
   double vel_coeff = 0.0;
   double effort_coeff = 0.0;

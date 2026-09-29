@@ -270,6 +270,8 @@ public:
   Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> q_;
   Eigen::Matrix<double, bipedal_wheel_core::CONTROL_DIM, bipedal_wheel_core::CONTROL_DIM> r_;
   Eigen::Matrix<double, 4, 12> coeffs_ = Eigen::Matrix<double, 4, 12>::Zero();
+  Eigen::Matrix<double, 4, 12> jump_coeffs_ = Eigen::Matrix<double, 4, 12>::Zero();
+  bool jump_lqr_custom_ = false;
   dynamic_reconfigure::Server<rm_chassis_controllers::LQRWeightConfig>* lqr_reconfig_srv_ = nullptr;
   bool lqr_reconfig_initialized_ = false;
 

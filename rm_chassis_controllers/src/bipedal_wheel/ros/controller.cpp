@@ -216,6 +216,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
   cmd_in.jump_cmd = jump_cmd_;
   cmd_in.overturn = overturn_;
   cmd_in.coeffs = &coeffs_;
+  cmd_in.jump_coeffs = &jump_coeffs_;
   cmd_in.power_limit = cmd_rt_buffer_.readFromRT()->cmd_chassis_.power_limit;
   cmd_in.vel_coeff = velocity_coeff_;
   cmd_in.effort_coeff = effort_coeff_;
@@ -543,6 +544,51 @@ bool BipedalController::setupLQR(ros::NodeHandle& controller_nh)
   }
   polyfit(ks, lengths, coeffs_);
 
+  std::vector<double> jump_q_diag, jump_r_diag;
+  const bool has_jump_q = controller_nh.getParam("jump_q", jump_q_diag);
+  const bool has_jump_r = controller_nh.getParam("jump_r", jump_r_diag);
+  if (has_jump_q != has_jump_r || (has_jump_q && (jump_q_diag.size() != bipedal_wheel_core::STATE_DIM ||
+                                                jump_r_diag.size() != bipedal_wheel_core::CONTROL_DIM)))
+  {
+    ROS_ERROR("jump_q and jump_r must both be provided with 6 and 2 entries");
+    return false;
+  }
+  if (!has_jump_q)
+  {
+    jump_lqr_custom_ = false;
+    jump_coeffs_ = coeffs_;
+    return true;
+  }
+  jump_lqr_custom_ = true;
+
+  auto jump_q = q_;
+  auto jump_r = r_;
+  for (int i = 0; i < bipedal_wheel_core::STATE_DIM; ++i)
+    jump_q(i, i) = jump_q_diag[i];
+  for (int i = 0; i < bipedal_wheel_core::CONTROL_DIM; ++i)
+    jump_r(i, i) = jump_r_diag[i];
+  if (!jump_q.allFinite() || !jump_r.allFinite() || (jump_q.diagonal().array() < 0.0).any() ||
+      (jump_r.diagonal().array() <= 0.0).any())
+  {
+    ROS_ERROR("Invalid jump_q or jump_r weights");
+    return false;
+  }
+  ks.clear();
+  for (double length : lengths)
+  {
+    Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::STATE_DIM> a{};
+    Eigen::Matrix<double, bipedal_wheel_core::STATE_DIM, bipedal_wheel_core::CONTROL_DIM> b{};
+    generateAB(*model_params_, a, b, length);
+    Lqr<double> jump_lqr(a, b, jump_q, jump_r);
+    if (!jump_lqr.computeK())
+    {
+      ROS_ERROR("Failed to compute jump LQR gains");
+      return false;
+    }
+    ks.push_back(jump_lqr.getK());
+  }
+  polyfit(ks, lengths, jump_coeffs_);
+
   return true;
 }
 
@@ -568,6 +614,9 @@ bool BipedalController::setupBiasParams(ros::NodeHandle& controller_nh)
 
 bool BipedalController::setupControlParams(ros::NodeHandle& controller_nh)
 {
+  controller_nh.param("jump_joint_effort_limit", control_params_->jump_joint_effort_limit, 0.0);
+  if (!std::isfinite(control_params_->jump_joint_effort_limit) || control_params_->jump_joint_effort_limit < 0.0)
+    return false;
   const std::pair<const char*, double*> tbl[] = {
     { "jumpOverTime", &control_params_->jump_over_time },
     { "down5cmStairPitchThreshold", &control_params_->down5cmStairPitchThreshold },
@@ -783,6 +832,8 @@ void BipedalController::lqrReconfigCB(rm_chassis_controllers::LQRWeightConfig& c
     ks.push_back(k);
   }
   polyfit(ks, lengths, coeffs_);
+  if (!jump_lqr_custom_)
+    jump_coeffs_ = coeffs_;
   ROS_INFO("[LQR] Weights reconfigured and coefficients updated successfully.");
 }
 

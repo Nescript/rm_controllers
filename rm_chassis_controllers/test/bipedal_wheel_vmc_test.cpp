@@ -201,38 +201,37 @@ TEST(BipedalWheelJump, JumpContactDetectorFlightAndLanding)
   EXPECT_FALSE(detector.update(30.0, 30.0, unstick_threshold, dt));
 }
 
-TEST(BipedalWheelJump, OnlyLegAngleFeedbackInConfirmedFlight)
+TEST(BipedalWheelJump, PushOffKeepsFullFeedbackAndFlightUsesCalibratedBias)
 {
   using namespace bipedal_wheel_core;
   Eigen::Matrix<double, STATE_DIM, 1> error;
   error << 1, 2, 3, 4, 5, 6;
   const auto original = error;
 
-  maskJumpFeedback(error, JumpPhase::IDLE, false);
+  maskJumpFeedback(error, JumpPhase::IDLE, 0.0, 0.0, 0.13);
   EXPECT_TRUE(error.isApprox(original));
 
-  maskJumpFeedback(error, JumpPhase::LEG_RETRACTION, false);
-  EXPECT_DOUBLE_EQ(error(POS), 0.0);
-  EXPECT_DOUBLE_EQ(error(VEL), 0.0);
-  EXPECT_DOUBLE_EQ(error(PITCH), 5.0);
+  maskJumpFeedback(error, JumpPhase::LEG_RETRACTION, 0.0, 0.0, 0.13);
+  EXPECT_TRUE(error.isApprox(original));
 
   error = original;
-  maskJumpFeedback(error, JumpPhase::JUMP_UP, false);
-  EXPECT_DOUBLE_EQ(error(THETA), 1.0);
-  EXPECT_DOUBLE_EQ(error(D_THETA), 2.0);
-  EXPECT_DOUBLE_EQ(error(POS), 0.0);
-  EXPECT_DOUBLE_EQ(error(VEL), 0.0);
-  EXPECT_DOUBLE_EQ(error(PITCH), 5.0);
-  EXPECT_DOUBLE_EQ(error(D_PITCH), 6.0);
+  maskJumpFeedback(error, JumpPhase::JUMP_UP, 0.0, 0.0, 0.13);
+  EXPECT_TRUE(error.isApprox(original));
 
-  for (const auto phase : { JumpPhase::JUMP_UP, JumpPhase::OFF_GROUND })
-  {
-    error = original;
-    maskJumpFeedback(error, phase, true);
-    EXPECT_DOUBLE_EQ(error(THETA), 1.0);
-    EXPECT_DOUBLE_EQ(error(D_THETA), 2.0);
-    EXPECT_TRUE(error.tail<4>().isZero());
-  }
+  error = original;
+  maskJumpFeedback(error, JumpPhase::OFF_GROUND, 0.13, -0.25, 0.13);
+  EXPECT_DOUBLE_EQ(error(THETA), 0.0);
+  EXPECT_DOUBLE_EQ(error(D_THETA), -0.25);
+  EXPECT_TRUE(error.tail<4>().isZero());
+
+  error = original;
+  maskJumpFeedback(error, JumpPhase::OFF_GROUND, 0.0, 0.1, 0.13);
+  EXPECT_DOUBLE_EQ(error(THETA), -0.13);
+
+  error = original;
+  maskJumpFeedback(error, JumpPhase::OFF_GROUND, 0.8, 0.1, 0.13);
+  EXPECT_DOUBLE_EQ(error(THETA), 0.6);
+  EXPECT_DOUBLE_EQ(error(D_THETA), 0.1);
 }
 }  // namespace
 

@@ -163,26 +163,10 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   // LQR Feedback Gain Interpolation using leg length
   if (ctx.cmd_in.coeffs == nullptr)
   {
-    ctx.logger.error("coeffs is nullptr in state_normal!");
+    ctx.logger.error("LQR coefficients are missing in state_normal!");
     return;
   }
-  const Eigen::Matrix<double, 4, 12>& coeffs_ = *ctx.cmd_in.coeffs;
   Eigen::Matrix<double, 2, 6> k_left, k_right;
-  k_left.setZero();
-  k_right.setZero();
-
-  for (int i = 0; i < 2; ++i)
-  {
-    for (int j = 0; j < 6; ++j)
-    {
-      k_left(i, j) = coeffs_(0, i + 2 * j) * std::pow(left_pos.L0, 3) +
-                     coeffs_(1, i + 2 * j) * std::pow(left_pos.L0, 2) + coeffs_(2, i + 2 * j) * left_pos.L0 +
-                     coeffs_(3, i + 2 * j);
-      k_right(i, j) = coeffs_(0, i + 2 * j) * std::pow(right_pos.L0, 3) +
-                      coeffs_(1, i + 2 * j) * std::pow(right_pos.L0, 2) + coeffs_(2, i + 2 * j) * right_pos.L0 +
-                      coeffs_(3, i + 2 * j);
-    }
-  }
 
   Eigen::Matrix<double, CONTROL_DIM, 1> u_left, u_right;
   u_left.setZero();
@@ -354,15 +338,6 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   }
   else
   {
-    // Start retracting immediately when flight is confirmed, even if the
-    // legs have not yet reached the push-off extension target.
-    if (jump_phase_ == JumpPhase::JUMP_UP && jump_contact_detector_.isAirborne())
-    {
-      jump_phase_ = JumpPhase::OFF_GROUND;
-      jumpTime_ = 0;
-      off_ground_timer_ = 0.0;
-    }
-
     // Jump states
     // In normal.cpp: jumpLengthDes contains target retraction, jump up, and off ground leg lengths
     // retraction: 0.11, jump_up: 0.34, off_ground: 0.11
@@ -463,7 +438,25 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     }
   }
 
-  const bool airborne = jump_phase_ != JumpPhase::IDLE && jump_contact_detector_.isAirborne();
+  // Select gains after phase transitions, including the first push-off cycle.
+  const auto* jump_coeffs = ctx.cmd_in.jump_coeffs ? ctx.cmd_in.jump_coeffs : ctx.cmd_in.coeffs;
+  const auto& coeffs_ = *(jump_phase_ == JumpPhase::IDLE ? ctx.cmd_in.coeffs : jump_coeffs);
+  for (int i = 0; i < CONTROL_DIM; ++i)
+  {
+    for (int j = 0; j < STATE_DIM; ++j)
+    {
+      const int col = i + CONTROL_DIM * j;
+      k_left(i, j) = ((coeffs_(0, col) * left_pos.L0 + coeffs_(1, col)) * left_pos.L0 + coeffs_(2, col)) *
+                         left_pos.L0 +
+                     coeffs_(3, col);
+      k_right(i, j) = ((coeffs_(0, col) * right_pos.L0 + coeffs_(1, col)) * right_pos.L0 + coeffs_(2, col)) *
+                          right_pos.L0 +
+                      coeffs_(3, col);
+    }
+  }
+
+  const bool flight_control = jump_phase_ == JumpPhase::OFF_GROUND;
+  const double jump_theta_bias = ctx.complete_stand ? (is_raw ? bias_params_.raw_theta : bias_params_.theta) : 0.0;
   if (is_raw && jump_phase_ != JumpPhase::IDLE)
   {
     ctx.raw_ready = false;
@@ -471,8 +464,14 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     raw_brake_hold_elapsed_ = 0.0;
     T_yaw = 0.0;
   }
-  maskJumpFeedback(x_left, jump_phase_, airborne);
-  maskJumpFeedback(x_right, jump_phase_, airborne);
+  maskJumpFeedback(x_left, jump_phase_, left_pos.theta + chassis_state.pitch,
+                   left_spd.dTheta + chassis_state.angular_vel.y(), jump_theta_bias);
+  maskJumpFeedback(x_right, jump_phase_, right_pos.theta + chassis_state.pitch,
+                   right_spd.dTheta + chassis_state.angular_vel.y(), jump_theta_bias);
+
+  // Keep the jump on the LQR feedback used by rm_ws. The MPC model is tuned
+  // for ground balance; joint effort is still limited after VMC conversion.
+  const bool use_mpc = jump_phase_ == JumpPhase::IDLE;
 
   // MPC solve with joint-space torque constraints
   double left_tp_min, left_tp_max, right_tp_min, right_tp_max;
@@ -482,14 +481,14 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
                                                                    input_max[LEG_Tp], right_tp_min, right_tp_max);
   mpc_u_min(LEG_Tp) = left_tp_min;
   mpc_u_max(LEG_Tp) = left_tp_max;
-  const bool left_mpc_solved = left_bounds_valid &&
-                               ctx.core->solveMpc(bipedal_wheel_core::LEFT, left_pos.L0, -x_left,
+  const bool left_mpc_solved = use_mpc && left_bounds_valid &&
+                               ctx.core->solveMpc(bipedal_wheel_core::LEFT, left_pos.L0, x_left,
                                                   Eigen::Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
                                                   -rollover_v_max, rollover_v_max, u_left);
   mpc_u_min(LEG_Tp) = right_tp_min;
   mpc_u_max(LEG_Tp) = right_tp_max;
-  const bool right_mpc_solved = right_bounds_valid &&
-                                ctx.core->solveMpc(bipedal_wheel_core::RIGHT, right_pos.L0, -x_right,
+  const bool right_mpc_solved = use_mpc && right_bounds_valid &&
+                                ctx.core->solveMpc(bipedal_wheel_core::RIGHT, right_pos.L0, x_right,
                                                    Eigen::Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
                                                    -rollover_v_max, rollover_v_max, u_right);
   if (!left_mpc_solved)
@@ -505,7 +504,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   k_right_unstick.block<1, 2>(1, 0) = k_right.block<1, 2>(1, 0);
 
   bool left_unstick = false, right_unstick = false;
-  if (airborne)
+  if (flight_control)
   {
     left_unstick = right_unstick = true;
   }
@@ -538,12 +537,17 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   ctx.lqr_status.theta = (left_pos.theta + right_pos.theta) / 2.0;
   ctx.lqr_status.d_theta = (left_spd.dTheta + right_spd.dTheta) / 2.0;
 
-  bool unstick[2] = { left_unstick, right_unstick };
+  // JUMP_UP keeps ground feedback until the length target is reached, but its
+  // contact measurements still belong in the public unstick status.
+  const bool reported_left_unstick = left_unstick || (jump_phase_ == JumpPhase::JUMP_UP && contact_left_unstick);
+  const bool reported_right_unstick = right_unstick || (jump_phase_ == JumpPhase::JUMP_UP && contact_right_unstick);
+  bool unstick[2] = { reported_left_unstick, reported_right_unstick };
   Eigen::Vector2d F_leg_vec(F_leg[LEFT], F_leg[RIGHT]);
   bool unstick_flag = left_unstick && right_unstick;
   ctx.logger.publishLqrStatus(-x_left, -x_right, x_left_ref, x_right_ref, u_left, u_right, F_leg_vec, unstick);
-  ctx.logger.publishUnstick(unstick_flag);
-  if ((ctx.complete_stand && unstick_flag && jump_phase_ != JumpPhase::LEG_RETRACTION) || airborne)
+  // Report measured contact loss as in rm_ws, including intentional flight.
+  ctx.logger.publishUnstick(reported_left_unstick && reported_right_unstick);
+  if ((ctx.complete_stand && unstick_flag && jump_phase_ != JumpPhase::LEG_RETRACTION) || flight_control)
   {
     u_left = k_left_unstick * (-x_left);
     u_right = k_right_unstick * (-x_right);
@@ -561,10 +565,13 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   auto limit_effort = [](double effort, double minimum, double maximum) {
     return std::isfinite(effort) ? std::clamp(effort, minimum, maximum) : 0.0;
   };
+  const double jump_limit = ctx.config.control.jump_joint_effort_limit;
+  const double joint_min = jump_phase_ != JumpPhase::IDLE && jump_limit > 0.0 ? -jump_limit : input_min[LEG_Tp];
+  const double joint_max = jump_phase_ != JumpPhase::IDLE && jump_limit > 0.0 ? jump_limit : input_max[LEG_Tp];
   for (double& effort : left_T)
-    effort = limit_effort(effort, input_min[LEG_Tp], input_max[LEG_Tp]);
+    effort = limit_effort(effort, joint_min, joint_max);
   for (double& effort : right_T)
-    effort = limit_effort(effort, input_min[LEG_Tp], input_max[LEG_Tp]);
+    effort = limit_effort(effort, joint_min, joint_max);
   left_wheel_cmd = limit_effort(left_wheel_cmd, input_min[WHEEL_T], input_max[WHEEL_T]);
   right_wheel_cmd = limit_effort(right_wheel_cmd, input_min[WHEEL_T], input_max[WHEEL_T]);
 
