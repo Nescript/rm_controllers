@@ -354,15 +354,6 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   }
   else
   {
-    // Start retracting immediately when flight is confirmed, even if the
-    // legs have not yet reached the push-off extension target.
-    if (jump_phase_ == JumpPhase::JUMP_UP && jump_contact_detector_.isAirborne())
-    {
-      jump_phase_ = JumpPhase::OFF_GROUND;
-      jumpTime_ = 0;
-      off_ground_timer_ = 0.0;
-    }
-
     // Jump states
     // In normal.cpp: jumpLengthDes contains target retraction, jump up, and off ground leg lengths
     // retraction: 0.11, jump_up: 0.34, off_ground: 0.11
@@ -464,6 +455,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   }
 
   const bool airborne = jump_phase_ != JumpPhase::IDLE && jump_contact_detector_.isAirborne();
+  const bool flight_control = airborne || jump_phase_ == JumpPhase::OFF_GROUND;
+  const double jump_theta_bias = ctx.complete_stand ? (is_raw ? bias_params_.raw_theta : bias_params_.theta) : 0.0;
   if (is_raw && jump_phase_ != JumpPhase::IDLE)
   {
     ctx.raw_ready = false;
@@ -471,8 +464,10 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     raw_brake_hold_elapsed_ = 0.0;
     T_yaw = 0.0;
   }
-  maskJumpFeedback(x_left, jump_phase_, airborne);
-  maskJumpFeedback(x_right, jump_phase_, airborne);
+  maskJumpFeedback(x_left, jump_phase_, flight_control, left_pos.theta + chassis_state.pitch,
+                   left_spd.dTheta + chassis_state.angular_vel.y(), jump_theta_bias);
+  maskJumpFeedback(x_right, jump_phase_, flight_control, right_pos.theta + chassis_state.pitch,
+                   right_spd.dTheta + chassis_state.angular_vel.y(), jump_theta_bias);
 
   // MPC solve with joint-space torque constraints
   double left_tp_min, left_tp_max, right_tp_min, right_tp_max;
@@ -505,7 +500,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   k_right_unstick.block<1, 2>(1, 0) = k_right.block<1, 2>(1, 0);
 
   bool left_unstick = false, right_unstick = false;
-  if (airborne)
+  if (flight_control)
   {
     left_unstick = right_unstick = true;
   }
@@ -543,7 +538,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   bool unstick_flag = left_unstick && right_unstick;
   ctx.logger.publishLqrStatus(-x_left, -x_right, x_left_ref, x_right_ref, u_left, u_right, F_leg_vec, unstick);
   ctx.logger.publishUnstick(unstick_flag);
-  if ((ctx.complete_stand && unstick_flag && jump_phase_ != JumpPhase::LEG_RETRACTION) || airborne)
+  if ((ctx.complete_stand && unstick_flag && jump_phase_ != JumpPhase::LEG_RETRACTION) || flight_control)
   {
     u_left = k_left_unstick * (-x_left);
     u_right = k_right_unstick * (-x_right);
