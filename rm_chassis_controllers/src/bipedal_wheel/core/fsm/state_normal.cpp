@@ -43,13 +43,6 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   const auto& left_spd = ctx.left_vmc->getSpd();
   const auto& right_spd = ctx.right_vmc->getSpd();
 
-  // x[THETA] = left_pos.theta - pitch
-  // x[D_THETA] = left_spd.dTheta - d_pitch
-  // x[POS] = x (horizontal position)
-  // x[VEL] = dx (horizontal velocity)
-  // x[PITCH] = pitch
-  // x[D_PITCH] = d_pitch
-  // Let's compute these state vectors for left and right legs:
   Eigen::Matrix<double, STATE_DIM, 1> x_left, x_right;
   x_left[THETA] = left_pos.theta + chassis_state.pitch;
   x_left[D_THETA] = left_spd.dTheta + chassis_state.angular_vel.y();

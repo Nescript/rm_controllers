@@ -153,7 +153,7 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     zero_origin.setValue(0, 0, 0);
     imu2odom.setOrigin(zero_origin);
     imu2odom.setRotation(imu2odom_quaternion);
-    base2odom = base2imu * imu2odom;
+    base2odom = imu2odom * base2imu;
     quatToRPY(toMsg(base2odom).rotation, roll, pitch, yaw);
 
     // Overturn detection: body z-axis pointing down in world frame
