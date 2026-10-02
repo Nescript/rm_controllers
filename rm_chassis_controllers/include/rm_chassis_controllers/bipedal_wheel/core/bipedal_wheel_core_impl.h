@@ -66,6 +66,8 @@ bool BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverageFilterTy
   pid_roll_ = pid_roll;
   pid_wheel_vel_diff_ = pid_wheel_vel_diff;
 
+  stand_up_state_ = StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
+
   // Initialize variant state to SitDown
   FSM_variant_ = SitDown<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
 
@@ -128,7 +130,7 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
       }
       else
       {
-        FSM_variant_ = StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>();
+        FSM_variant_ = stand_up_state_;
       }
     }
     else if (robot_mode_ == RobotPhysicalState::STAND)
@@ -184,6 +186,9 @@ ControlOutput BipedalWheelCore<PidType, LoggerType, RampFilterType, MovingAverag
 
   // 5. Run active state
   std::visit([&ctx](auto& state) { state.execute(ctx); }, FSM_variant_);
+  if (const auto* stand_up =
+          std::get_if<StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(&FSM_variant_))
+    stand_up_state_ = *stand_up;
   if (!std::holds_alternative<Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>>(FSM_variant_))
   {
     logger_->publishUnstick(false);

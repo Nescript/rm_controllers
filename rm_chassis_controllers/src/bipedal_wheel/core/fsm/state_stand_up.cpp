@@ -37,16 +37,15 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     ctx.balance_state_changed = true;
     ctx.complete_stand = false;
     left_arrive_flag_ = right_arrive_flag_ = false;
-    left_arrive_time_ = right_arrive_time_ = 0.0;
 
     detectLegState(left_theta_total, ctx.config.threshold, left_leg_orientation, ctx.logger);
     detectLegState(right_theta_total, ctx.config.threshold, right_leg_orientation, ctx.logger);
   }
 
   double left_spring_force =
-      -f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+      -(((2094.45f * left_pos.L0 - 3091.28f) * left_pos.L0 + 1408.375f) * left_pos.L0 - 80.91f);
   double right_spring_force =
-      -f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+      -(((2094.45f * right_pos.L0 - 3091.28f) * right_pos.L0 + 1408.375f) * right_pos.L0 - 80.91f);
 
   LegCommand left_cmd{};
   LegCommand right_cmd{};
@@ -54,10 +53,10 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   // setUpLegMotion takes inputs and outputs
   setUpLegMotion(left_theta_total, left_dtheta_total, left_pos.L0, left_pos.theta, ctx.config.threshold,
                  right_leg_orientation, left_leg_orientation, left_leg_command_, left_stop_,
-                 left_arrive_flag_, left_arrive_time_, ctx.dt);
+                 left_arrive_flag_, left_arrive_time_);
   setUpLegMotion(right_theta_total, right_dtheta_total, right_pos.L0, right_pos.theta, ctx.config.threshold,
                  left_leg_orientation, right_leg_orientation, right_leg_command_, right_stop_,
-                 right_arrive_flag_, right_arrive_time_, ctx.dt);
+                 right_arrive_flag_, right_arrive_time_);
 
   ramp_length_des_l_->input(left_leg_command_.desired_length);
   ramp_angle_des_l_->input(left_leg_command_.desired_angle);
@@ -107,7 +106,7 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
     double theta_total, double dtheta_total, double leg_length, double leg_theta,
     const LegStateThresholdParams& threshold, const LegOrientation& other_leg_orientation,
     LegOrientation& leg_orientation, StandUpLegCommand& legCommand, bool& stop_flag, bool& arrive_flag,
-    double& arrive_time_counter, double dt)
+    double arrive_time)
 {
   switch (leg_orientation)
   {
@@ -131,28 +130,21 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
       {
         legCommand.desired_angle_vel = -1.5;
       }
-      // Once the leg has settled in the arrival sector, brake it rather than
-      // continuing to rotate during the confirmation interval. Keep braking
-      // through speed disturbances, but require a fresh continuous dwell.
-      if (theta_total > 0.0 && theta_total < M_PI_2 + 0.4 &&
-          (arrive_flag || std::abs(dtheta_total) < 0.1))
+      // Preserve the verified rm_ws motion and its pass-by-value arrival timestamp.
+      // Do not turn this into a continuous stationary dwell: that changes stand-up.
+      if (std::abs(dtheta_total) < 0.1)
       {
-        arrive_flag = true;
-        legCommand.desired_angle_vel = 0.0;
-        if (std::isfinite(dtheta_total) && std::abs(dtheta_total) < 0.1)
+        if (theta_total > 0.0 && theta_total < M_PI_2 + 0.4f)
         {
-          if (std::isfinite(dt) && dt > 0.0)
-            arrive_time_counter += dt;
-          if (arrive_time_counter >= threshold.arrive_time_threshold)
+          legCommand.desired_angle_vel = -0.5f;
+          if (!arrive_flag)
+          {
+            arrive_flag = true;
+            arrive_time = ros::Time::now().toSec();
+          }
+          if (ros::Time::now().toSec() - arrive_time > threshold.arrive_time_threshold)
             leg_orientation = LegOrientation::BEHIND;
         }
-        else
-          arrive_time_counter = 0.0;
-      }
-      else
-      {
-        arrive_flag = false;
-        arrive_time_counter = 0.0;
       }
       break;
     case LegOrientation::BEHIND:

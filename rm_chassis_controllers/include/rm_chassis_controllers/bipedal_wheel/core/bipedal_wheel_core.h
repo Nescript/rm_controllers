@@ -128,6 +128,9 @@ private:
                Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType> >
       FSM_variant_;
 
+  // rm_ws keeps one StandUp instance across mode changes. Preserve its history.
+  StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType> stand_up_state_;
+
   void updateEstimation(double dt, const bipedal_wheel_core::SensorMeasurements& sens_in,
                         const bipedal_wheel_core::ControllerCommands& cmd_in);
 
