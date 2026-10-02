@@ -260,9 +260,9 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   double gravity = ctx.config.model_params.f_gravity;
   // Spring forces
   double left_spring_force =
-      f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+      f_spring_force(left_pos.L0);
   double right_spring_force =
-      f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+      f_spring_force(right_pos.L0);
 
   double F_inertia_left =
       ctx.config.model_params.M * friction_circle * left_pos.L0 / ctx.config.chassis_geometry.wheel_track;

@@ -23,9 +23,9 @@ void Upstairs<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exe
   }
 
   double left_spring_force =
-      -f_spring_force(left_pos.L0, ctx.left_vmc->getL1(), ctx.left_vmc->getL2(), ctx.config.spring);
+      -f_spring_force(left_pos.L0);
   double right_spring_force =
-      -f_spring_force(right_pos.L0, ctx.right_vmc->getL1(), ctx.right_vmc->getL2(), ctx.config.spring);
+      -f_spring_force(right_pos.L0);
 
   double length_des_l = ctx.config.threshold.upstair_des_length;
   double length_des_r = ctx.config.threshold.upstair_des_length;

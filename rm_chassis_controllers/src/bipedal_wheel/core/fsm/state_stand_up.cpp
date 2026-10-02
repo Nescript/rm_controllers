@@ -43,9 +43,9 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
   }
 
   double left_spring_force =
-      -(((2094.45f * left_pos.L0 - 3091.28f) * left_pos.L0 + 1408.375f) * left_pos.L0 - 80.91f);
+      -f_spring_force(left_pos.L0);
   double right_spring_force =
-      -(((2094.45f * right_pos.L0 - 3091.28f) * right_pos.L0 + 1408.375f) * right_pos.L0 - 80.91f);
+      -f_spring_force(right_pos.L0);
 
   LegCommand left_cmd{};
   LegCommand right_cmd{};

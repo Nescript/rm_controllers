@@ -70,19 +70,10 @@ inline void clamp(double& val, double minVal, double maxVal)
     val = maxVal;
 }
 
-inline double f_spring_force(double L0, double l1, double l2, const SpringParams& spring)
+// Empirical spring compensation validated in rm_ws. All FSM states share it.
+inline double f_spring_force(double L0)
 {
-  double cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2.0 * l1 * l2);
-  clamp(cos_theta3, -1.0, 1.0);  // Prevent NaN in std::acos
-  double theta3 = std::acos(cos_theta3);
-  double ls = std::sqrt(spring.s2 * spring.s2 + spring.s3 * spring.s3 -
-                        2.0 * spring.s2 * spring.s3 * std::cos(theta3 - spring.alpha_s));
-  double sin_theta3 = std::sin(theta3);
-  if (ls == 0.0 || sin_theta3 == 0.0)
-    return 0.0;
-  double Fv =
-      spring.f_spring * (L0 * spring.s2 * spring.s3 * std::sin(theta3 - spring.alpha_s)) / (ls * l1 * l2 * sin_theta3);
-  return Fv;
+  return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
 }
 
 class LinearKalmanFilter2D
