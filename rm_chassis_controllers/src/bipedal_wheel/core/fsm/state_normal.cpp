@@ -601,8 +601,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   ctx.left_vmc->leg_conv(F_leg[LEFT], u_left(LEG_Tp) + T_theta_diff, left_T);
   ctx.right_vmc->leg_conv(F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, right_T);
 
-  double left_wheel_cmd = unstick_flag ? 0.0 : u_left(WHEEL_T) - T_yaw + T_wheel_diff;
-  double right_wheel_cmd = unstick_flag ? 0.0 : u_right(WHEEL_T) + T_yaw + T_wheel_diff;
+  double left_wheel_cmd = unstick_flag ? 0.0 : u_left(WHEEL_T) - T_yaw - T_wheel_diff;
+  double right_wheel_cmd = unstick_flag ? 0.0 : u_right(WHEEL_T) + T_yaw - T_wheel_diff;
 
   // Held MPC outputs and extra yaw/differential commands also need motor-side limits.
   auto limit_effort = [](double effort, double minimum, double maximum) {
