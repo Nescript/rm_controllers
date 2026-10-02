@@ -30,6 +30,12 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
     off_ground_timer_ = 0.0;
     jump_contact_detector_.reset();
+    for (int side = 0; side < 2; ++side)
+    {
+      last_mpc_control_[side].setZero();
+      mpc_failed_[side] = false;
+      mpc_warn_elapsed_[side] = 0.0;
+    }
     support_force_history_[LEFT] = SupportForceHistory{};
     support_force_history_[RIGHT] = SupportForceHistory{};
     leftSupportForceAveragePtr_->clear();
@@ -471,7 +477,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
 
   // Keep the jump on the LQR feedback used by rm_ws. The MPC model is tuned
   // for ground balance; joint effort is still limited after VMC conversion.
-  const bool use_mpc = jump_phase_ == JumpPhase::IDLE;
+  const bool use_mpc = ctx.config.mpc.enabled && jump_phase_ == JumpPhase::IDLE;
 
   // MPC solve with joint-space torque constraints
   double left_tp_min, left_tp_max, right_tp_min, right_tp_max;
@@ -491,10 +497,46 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
                                 ctx.core->solveMpc(bipedal_wheel_core::RIGHT, right_pos.L0, x_right,
                                                    Eigen::Matrix<double, STATE_DIM, 1>::Zero(), mpc_u_min, mpc_u_max,
                                                    -rollover_v_max, rollover_v_max, u_right);
-  if (!left_mpc_solved)
+  if (use_mpc)
+  {
+    // A failed ground solve must not silently switch controllers. Hold the last
+    // successful MPC output (zero before the first success); motor limits below
+    // still apply after VMC and yaw corrections.
+    auto handle_result = [&](int side, bool solved, bool bounds_valid,
+                             Eigen::Matrix<double, CONTROL_DIM, 1>& control) {
+      if (solved)
+      {
+        last_mpc_control_[side] = control;
+        mpc_failed_[side] = false;
+        mpc_warn_elapsed_[side] = 0.0;
+        return;
+      }
+      control = last_mpc_control_[side];
+      mpc_warn_elapsed_[side] += ctx.dt;
+      if (!mpc_failed_[side] || mpc_warn_elapsed_[side] >= 1.0)
+      {
+        ctx.logger.warn(std::string("[balance] MPC solve failed on ") + (side == LEFT ? "LEFT" : "RIGHT") +
+                        (bounds_valid ? ": solver/cache failure" : ": invalid joint torque bounds") +
+                        "; holding last successful MPC output, no LQR fallback");
+        mpc_warn_elapsed_[side] = 0.0;
+      }
+      mpc_failed_[side] = true;
+    };
+    handle_result(LEFT, left_mpc_solved, left_bounds_valid, u_left);
+    handle_result(RIGHT, right_mpc_solved, right_bounds_valid, u_right);
+  }
+  else
+  {
+    // Explicit LQR mode and jump feedback are independent of solve failures.
     u_left = k_left * (-x_left);
-  if (!right_mpc_solved)
     u_right = k_right * (-x_right);
+    for (int side = 0; side < 2; ++side)
+    {
+      last_mpc_control_[side].setZero();
+      mpc_failed_[side] = false;
+      mpc_warn_elapsed_[side] = 0.0;
+    }
+  }
 
   // Unstick detection
   Eigen::Matrix<double, CONTROL_DIM, STATE_DIM> k_left_unstick, k_right_unstick;
@@ -561,7 +603,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   double left_wheel_cmd = unstick_flag ? 0.0 : u_left(WHEEL_T) - T_yaw + T_wheel_diff;
   double right_wheel_cmd = unstick_flag ? 0.0 : u_right(WHEEL_T) + T_yaw + T_wheel_diff;
 
-  // MPC fallback and the extra yaw/differential commands also need motor-side limits.
+  // Held MPC outputs and extra yaw/differential commands also need motor-side limits.
   auto limit_effort = [](double effort, double minimum, double maximum) {
     return std::isfinite(effort) ? std::clamp(effort, minimum, maximum) : 0.0;
   };

@@ -43,6 +43,11 @@ private:
   double raw_brake_elapsed_ = 0.0, raw_brake_hold_elapsed_ = 0.0, raw_brake_length_ = 0.2;
   double jump_cooldown_counter_ = 0.0;
   double off_ground_timer_ = 0.0;
+  Eigen::Matrix<double, CONTROL_DIM, 1> last_mpc_control_[2] = {
+    Eigen::Matrix<double, CONTROL_DIM, 1>::Zero(), Eigen::Matrix<double, CONTROL_DIM, 1>::Zero()
+  };
+  bool mpc_failed_[2] = { false, false };
+  double mpc_warn_elapsed_[2] = { 0.0, 0.0 };
   JumpContactDetector jump_contact_detector_{};
 
   struct SupportForceHistory
