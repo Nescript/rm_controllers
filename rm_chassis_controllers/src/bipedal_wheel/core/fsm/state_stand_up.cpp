@@ -37,6 +37,7 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::exec
     ctx.balance_state_changed = true;
     ctx.complete_stand = false;
     left_arrive_flag_ = right_arrive_flag_ = false;
+    left_arrive_time_ = right_arrive_time_ = 0.0;
 
     detectLegState(left_theta_total, ctx.config.threshold, left_leg_orientation, ctx.logger);
     detectLegState(right_theta_total, ctx.config.threshold, right_leg_orientation, ctx.logger);
@@ -121,8 +122,6 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
       break;
     case LegOrientation::FRONT:
       stop_flag = false;
-      if (!arrive_flag)
-        arrive_flag = false;
       legCommand.desired_angle = M_PI_2 - 0.35;
       legCommand.desired_length = 0.34;
       legCommand.desired_angle_vel = 0.0;
@@ -132,20 +131,28 @@ void StandUp<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::setU
       {
         legCommand.desired_angle_vel = -1.5;
       }
-      if (std::abs(dtheta_total) < 0.1)
+      // Once the leg has settled in the arrival sector, brake it rather than
+      // continuing to rotate during the confirmation interval. Keep braking
+      // through speed disturbances, but require a fresh continuous dwell.
+      if (theta_total > 0.0 && theta_total < M_PI_2 + 0.4 &&
+          (arrive_flag || std::abs(dtheta_total) < 0.1))
       {
-        if (theta_total > 0 && theta_total < M_PI_2 + 0.4)
+        arrive_flag = true;
+        legCommand.desired_angle_vel = 0.0;
+        if (std::isfinite(dtheta_total) && std::abs(dtheta_total) < 0.1)
         {
-          legCommand.desired_angle_vel = -0.5;
-          if (!arrive_flag)
-          {
-            arrive_flag = true;
-            arrive_time_counter = 0.0;
-          }
-          arrive_time_counter += dt;
-          if (arrive_time_counter > threshold.arrive_time_threshold)
+          if (std::isfinite(dt) && dt > 0.0)
+            arrive_time_counter += dt;
+          if (arrive_time_counter >= threshold.arrive_time_threshold)
             leg_orientation = LegOrientation::BEHIND;
         }
+        else
+          arrive_time_counter = 0.0;
+      }
+      else
+      {
+        arrive_flag = false;
+        arrive_time_counter = 0.0;
       }
       break;
     case LegOrientation::BEHIND:

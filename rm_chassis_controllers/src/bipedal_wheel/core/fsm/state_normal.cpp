@@ -27,6 +27,7 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
     was_raw_ = raw_brake_ready_ = raw_brake_timed_out_ = false;
     raw_brake_elapsed_ = raw_brake_hold_elapsed_ = 0.0;
     pos_des_ = 0.0;
+    ctx.lqr_status.x = 0.0;
     jump_cooldown_counter_ = ctx.config.control.jump_over_time;  // Allow immediate jump
     off_ground_timer_ = 0.0;
     jump_contact_detector_.reset();
