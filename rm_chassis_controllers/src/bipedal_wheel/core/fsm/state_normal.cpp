@@ -233,21 +233,21 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
       rollover_v_max = tip_acc / yaw_rate_abs;
     }
   }
-  clamp(x_left_ref(VEL), -rollover_v_max, rollover_v_max);
-  clamp(x_right_ref(VEL), -rollover_v_max, rollover_v_max);
+  //clamp(x_left_ref(VEL), -rollover_v_max, rollover_v_max);
+  //clamp(x_right_ref(VEL), -rollover_v_max, rollover_v_max);
 
   x_left -= x_left_ref;
   x_right -= x_right_ref;
 
-  clamp(x_left(VEL), -1.1, 1.1);
-  clamp(x_right(VEL), -1.1, 1.1);
+  //clamp(x_left(VEL), -1.1, 1.1);
+  //clamp(x_right(VEL), -1.1, 1.1);
 
   const double k_pitch = -0.1, b = 0.35;
   double pitch_error_clamp = k_pitch * ctx.lqr_status.dx + b;
-  clamp(x_left(PITCH), -pitch_error_clamp, pitch_error_clamp);
-  clamp(x_right(PITCH), -pitch_error_clamp, pitch_error_clamp);
-  clamp(x_left(THETA), -0.6, 0.6);
-  clamp(x_right(THETA), -0.6, 0.6);
+  //clamp(x_left(PITCH), -pitch_error_clamp, pitch_error_clamp);
+  //clamp(x_right(PITCH), -pitch_error_clamp, pitch_error_clamp);
+  //clamp(x_left(THETA), -0.6, 0.6);
+  //clamp(x_right(THETA), -0.6, 0.6);
 
   // YAML bounds are wheel joint torque and each leg joint motor torque.
   const auto& input_min = ctx.config.mpc.input_min;
