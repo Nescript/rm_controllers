@@ -21,12 +21,9 @@
 #include <hardware_interface/imu_sensor_interface.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <std_msgs/Float64.h>
-#include <std_msgs/Float64MultiArray.h>
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
-#include <rm_msgs/PowerManagementSampleAndStatusData.h>
 #include <atomic>
-#include <array>
 #include <limits>
 #include "rm_chassis_controllers/chassis_base.h"
 #include <dynamic_reconfigure/server.h>
@@ -37,8 +34,6 @@
 #include "bipedal_wheel_controller/controller_mode/mode_manager.h"
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include "bipedal_wheel_controller/controller_interface.h"
-
-#include "bipedal_wheel_controller/powerID.h"
 
 namespace rm_chassis_controllers
 {
@@ -97,12 +92,9 @@ public:
   void pubDebugData(const std::string& name, double value) override{ debugPub_->add(name, value); };
   void setRecoveryLegSpdTurnback(bool recovery_leg_spd_turnback) override { recovery_leg_spd_turnback_ = recovery_leg_spd_turnback; }
   bool getRecoveryLegSpdTurnback() const override { return recovery_leg_spd_turnback_;}
-  inline const Eigen::Matrix<double, 12, 1>& getPowerCoeffs() { return *power_coeffs_rt_buffer_.readFromRT(); }
   // clang-format on
 private:
   void updateEstimation(const ros::Time& time, const ros::Duration& period);
-  void updatePowerModel(const ros::Time& time, const ros::Duration& period);
-  void onPowerMeas(const rm_msgs::PowerManagementSampleAndStatusData::ConstPtr& msg);
 
   bool setupLQR(ros::NodeHandle& controller_nh);
   bool setupParams(ros::NodeHandle& controller_nh);
@@ -175,27 +167,7 @@ private:
   LQRConfig config_{};
   bool dynamic_reconfig_initialized_{ false };
   ros::Subscriber leg_cmd_sub_, recovery_leg_spd_turnback_sub_;
-  ros::Subscriber power_status_sub_;  // 裁判系统底盘功率订阅
   ros::Publisher unstick_pub_, upstair_status_pub_;
-
-  // Power model online identification (RLS)
-  PowerModel power_model_;
-  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>> power_model_pub_;
-  realtime_tools::RealtimeBuffer<Eigen::Matrix<double, 12, 1>> power_coeffs_rt_buffer_;
-
-  // 与裁判系统功率对齐用的状态环形缓冲（RT 线程写入，referee 回调线程读取）
-  struct PowerSample
-  {
-    ros::Time stamp;
-    double v{}, omega{}, a{}, alpha{};
-  };
-  static constexpr int POWER_BUFFER_SIZE = 500;  // 1kHz 下覆盖 500ms
-  std::array<PowerSample, POWER_BUFFER_SIZE> power_buffer_{};
-  std::atomic<int> power_buffer_head_{ 0 };
-  std::atomic<double> chassis_power_meas_{ 0.0 };  // 最新底盘功率（W）
-  std::atomic<double> chassis_power_stamp_{ 0.0 };
-  double last_yaw_rate_{ 0.0 };  // 上周期偏航角速度，用于差分求角加速度
-  ros::Time last_power_update_time_{};
 
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>> legged_chassis_status_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisMode>> legged_chassis_mode_pub_;

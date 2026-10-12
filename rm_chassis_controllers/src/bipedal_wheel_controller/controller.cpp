@@ -83,20 +83,6 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
 
   down_5cm_stair_srv_ =
       controller_nh.advertiseService("/down_5cm_stair", &BipedalController::down5cmStairSrvCallback, this);
-
-  // Power model online identification
-  double power_lambda = 0.999, power_alpha_ridge = 0.001;
-  controller_nh.param("power_model/lambda", power_lambda, power_lambda);
-  controller_nh.param("power_model/alpha_ridge", power_alpha_ridge, power_alpha_ridge);
-  power_model_.init(power_lambda, power_alpha_ridge);
-  Eigen::Matrix<double, 12, 1> init_c;
-  init_c.setZero();
-  power_coeffs_rt_buffer_.initRT(init_c);
-  power_status_sub_ = root_nh.subscribe<rm_msgs::PowerManagementSampleAndStatusData>(
-      "/rm_referee/power_management/sample_and_status", 10, &BipedalController::onPowerMeas, this);
-  power_model_pub_.reset(new realtime_tools::RealtimePublisher<std_msgs::Float64MultiArray>(
-      root_nh, "/power_model/c", 1));
-
   debugPub_ = std::make_shared<DebugDataPublisher>(controller_nh, "debug_data");
   return true;
 }
@@ -126,7 +112,6 @@ void BipedalController::moveJoint(const ros::Time& time, const ros::Duration& pe
     mode_manager_->switchMode(RECOVER);
   }
   updateEstimation(time, period);
-  updatePowerModel(time, period);
   mode_manager_->getModeImpl()->execute(time, period);
   pubState();
 }
@@ -306,86 +291,6 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   debugPub_->add("right_F_real", right_F_real.F);
   debugPub_->add("wheel_vel_aver", wheel_vel_aver);
   debugPub_->publish();
-}
-
-void BipedalController::updatePowerModel(const ros::Time& time, const ros::Duration& period)
-{
-  const double dt = period.toSec();
-  const double v = chassis_state_.x_vel;
-  const double omega = chassis_state_.angular_vel.z;
-  // a 直接用 IMU base 系加速度，比速度差分噪声低一个量级
-  const double a = chassis_state_.linear_acc.x;
-  // alpha 没有直读来源，对角速度差分
-  const double alpha = dt > 0.0 && !last_power_update_time_.isZero() ? (omega - last_yaw_rate_) / dt : 0.0;
-
-  last_yaw_rate_ = omega;
-  last_power_update_time_ = time;
-
-  // 仅在实时线程中将运动状态写入环形缓冲，剥离矩阵求解与跨线程竞争
-  PowerSample s;
-  s.stamp = time;
-  s.v = v;
-  s.omega = omega;
-  s.a = a;
-  s.alpha = alpha;
-  const int head = power_buffer_head_.load(std::memory_order_relaxed);
-  power_buffer_[head] = s;
-  power_buffer_head_.store((head + 1) % POWER_BUFFER_SIZE, std::memory_order_release);
-}
-
-void BipedalController::onPowerMeas(const rm_msgs::PowerManagementSampleAndStatusData::ConstPtr& msg)
-{
-  chassis_power_meas_.store(msg->chassis_power, std::memory_order_relaxed);
-  chassis_power_stamp_.store(msg->stamp.toSec(), std::memory_order_relaxed);
-
-  // 在环形缓冲中找与功率时间戳最近的状态样本，对齐后喂给辨识器
-  const int head = power_buffer_head_.load(std::memory_order_acquire);
-  double best_dt = std::numeric_limits<double>::max();
-  PowerSample best_sample;
-  bool found = false;
-
-  for (int i = 0; i < POWER_BUFFER_SIZE; ++i)
-  {
-    const PowerSample& s = power_buffer_[(head - 1 - i + POWER_BUFFER_SIZE) % POWER_BUFFER_SIZE];
-    if (s.stamp.isZero())
-      break;  // 尚未写满
-    const double d = std::abs((s.stamp - msg->stamp).toSec());
-    if (d < best_dt)
-    {
-      best_dt = d;
-      best_sample = s;  // 值拷贝，杜绝裸指针在后续计算期间被 RT 线程覆写
-      found = true;
-    }
-    else
-      break;  // 时间戳单调，越往前差越大
-  }
-
-  // 对齐误差在 50ms 以内认为有效
-  if (found && best_dt < 0.05)
-  {
-    // 持续激励（PE）判定：在静止死区内不更新递归统计量，防止协方差风暴（Covariance Windup）
-    if (power_model_.isExcited(best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha))
-    {
-      power_model_.updateD(0, best_sample.v, best_sample.omega, best_sample.a, best_sample.alpha, msg->chassis_power);
-
-      // 在非实时回调线程中执行正规方程求解与物理合理性校验
-      if (power_model_.solve())
-      {
-        const auto& c = power_model_.getC();
-        power_coeffs_rt_buffer_.writeFromNonRT(c);
-
-        if (power_model_pub_->trylock())
-        {
-          power_model_pub_->msg_.data.assign(c.data(), c.data() + 12);
-          power_model_pub_->unlockAndPublish();
-        }
-      }
-      else
-      {
-        ROS_WARN_THROTTLE(2.0, "[PowerID] 求解失败或系数未通过物理合理性校验，保留上一稳定解");
-      }
-    }
-  }
 }
 
 void BipedalController::pubState()

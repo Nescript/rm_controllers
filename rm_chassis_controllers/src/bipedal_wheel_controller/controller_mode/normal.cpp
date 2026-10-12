@@ -34,12 +34,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     ROS_INFO("[balance] Enter NORMAL");
     controller->clearStatus();
     jump_phase_ = JumpPhase::IDLE;
-    jumpTime_ = 0;
-    jump_contact_detector_.reset();
-    support_force_history_[LEFT] = SupportForceHistory{};
-    support_force_history_[RIGHT] = SupportForceHistory{};
-    leftSupportForceAveragePtr_->clear();
-    rightSupportForceAveragePtr_->clear();
     pos_des_ = 0.0f;
     controller->setStateChange(true);
   }
@@ -139,13 +133,6 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
       x_left(PITCH) -= bias_params_->raw_pitch;
       x_right(PITCH) -= bias_params_->raw_pitch;
     }
-    if (jump_phase_ == JumpPhase::LEG_RETRACTION)
-    {
-      // x(THETA) = leg_pos.theta + chassis_pitch is the leg angle in the world frame. A zero world-frame
-      // reference makes leg_pos.theta_des = -chassis_pitch, i.e. body inclination + leg swing angle = pi/2.
-      // Compensate the normal leg-angle bias so that the physical reference remains exactly zero.
-      x_left_ref(THETA) = x_right_ref(THETA) = -bias_params_->theta;
-    }
     x_left_ref(POS) = x_right_ref(POS) = pos_des_;
     if (protect_flag_)
     {
@@ -191,38 +178,15 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   double F_pid_left{}, F_pid_right{}, T_wheel_diff{};
   Eigen::Matrix<double, 2, 1> F_leg;
   F_leg.setZero();
-  // Detect landing before computing thrust, so extension stops in this cycle.
-  const bool checking_landing = jump_phase_ == JumpPhase::OFF_GROUND;
-  bool landing_left_unstick = true, landing_right_unstick = true;
-  if (checking_landing)
-  {
-    landing_left_unstick = unstickDetection(
-        LEFT, left_leg_state.vmc->getForceReal().F + left_spring_force, left_leg_state.vmc->getForceReal().Tp, left_spd.dL0,
-        left_pos.L0, chassis_state.linear_acc.z, model_params_, left_leg_state.x, leftSupportForceAveragePtr_, period);
-    landing_right_unstick = unstickDetection(
-        RIGHT, right_leg_state.vmc->getForceReal().F + right_spring_force, right_leg_state.vmc->getForceReal().Tp, right_spd.dL0,
-        right_pos.L0, chassis_state.linear_acc.z, model_params_, right_leg_state.x, rightSupportForceAveragePtr_, period);
-    if (jump_contact_detector_.update(leftSupportForceAveragePtr_->output(), rightSupportForceAveragePtr_->output(),
-                                     unstick_threshold, period.toSec()))
-    {
-      jump_phase_ = JumpPhase::IDLE;
-      jumpTime_ = 0;
-      lastJumpTime_ = time;
-      controller->setJumpCmd(false);
-      pid_legs_[LEFT]->reset();
-      pid_legs_[RIGHT]->reset();
-      ROS_INFO("[balance] Jump landed");
-    }
-  }
-
+  bool jump_open_loop = false;
   // check jump
   if (jump_phase_ == JumpPhase::IDLE &&
-      time - lastJumpTime_ > ros::Duration(control_params_->jumpOverTime_) && controller->getJumpCmd())
+      ros::Time::now() - lastJumpTime_ > ros::Duration(control_params_->jumpOverTime_) && controller->getJumpCmd())
+      // 检查是否大于设定的跳跃间隔时间
   {
     jump_phase_ = JumpPhase::LEG_RETRACTION;
-    jumpTime_ = 0;
-    jump_contact_detector_.reset();
     ROS_INFO("[balance] Jump start");
+
   }
   if (jump_phase_ == JumpPhase::IDLE)
   {
@@ -265,13 +229,12 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         {
           jumpTime_ = 0;
           jump_phase_ = JumpPhase::JUMP_UP;
-          ROS_INFO("[balance] Enter JUMP_UP");
         }
         break;
       }
       case JumpPhase::JUMP_UP:
-        F_leg(LEFT) = control_params_->jump_up_force * (1 - 3 * pow(s_left, 2) + 2 * pow(s_left, 3)) + gravity;
-        F_leg(RIGHT) = control_params_->jump_up_force * (1 - 3 * pow(s_right, 2) + 2 * pow(s_right, 3)) + gravity;
+        ROS_INFO("[balance] ENTER JUMP_UP");
+        jump_open_loop = true;
         if (current_leg_length > leg_length_des - 0.01f)
         {
           jumpTime_++;
@@ -281,15 +244,10 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
           jumpTime_ = 0;
           jump_phase_ = JumpPhase::OFF_GROUND;
           off_ground_start_time_ = time;
-          jump_contact_detector_.reset();
-          support_force_history_[LEFT] = SupportForceHistory{};
-          support_force_history_[RIGHT] = SupportForceHistory{};
-          leftSupportForceAveragePtr_->clear();
-          rightSupportForceAveragePtr_->clear();
         }
         break;
       case JumpPhase::OFF_GROUND:
-        // Retract for 200 ms from phase entry, then extend until confirmed contact.
+        // Retract for 200 ms from phase entry, then keep commanding extension.
         if (time - off_ground_start_time_ < ros::Duration(0.2))
         {
           const double s_left_flip = 1 - s_left;
@@ -301,8 +259,8 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         }
         else
         {
-          F_leg(LEFT)  = 100.0;
-          F_leg(RIGHT) = 100.0;
+          F_leg(LEFT) = 80.0;
+          F_leg(RIGHT) = 80.0;
         }
         break;
     }
@@ -321,21 +279,15 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   {
     left_unstick = right_unstick = true;
   }
-  else if (checking_landing)
-  {
-    // Reuse landing measurements without advancing the filters twice.
-    left_unstick = landing_left_unstick;
-    right_unstick = landing_right_unstick;
-  }
   else if (controller->getCompleteStand() && jump_phase_ != JumpPhase::LEG_RETRACTION &&
            controller->getBaseState() == rm_msgs::ChassisCmd::FOLLOW)
   {
     left_unstick =
-        unstickDetection(LEFT, last_left_unstick ? F_pid_left : left_leg_state.vmc->getForceReal().F + left_spring_force,
+        unstickDetection(last_left_unstick ? F_pid_left : left_leg_state.vmc->getForceReal().F + left_spring_force,
                          u_left(LEG_Tp), left_spd.dL0, left_pos.L0, chassis_state.linear_acc.z, model_params_,
                          left_leg_state.x, leftSupportForceAveragePtr_, period);
     right_unstick =
-        unstickDetection(RIGHT, last_right_unstick ? F_pid_right : right_leg_state.vmc->getForceReal().F + right_spring_force,
+        unstickDetection(last_right_unstick ? F_pid_right : right_leg_state.vmc->getForceReal().F + right_spring_force,
                          u_right(LEG_Tp), right_spd.dL0, right_pos.L0, chassis_state.linear_acc.z, model_params_,
                          right_leg_state.x, rightSupportForceAveragePtr_, period);
   }
@@ -361,8 +313,17 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
 
   // Control
   double left_T[2], right_T[2];
-  left_leg_state.vmc->leg_conv(F_leg[LEFT], u_left(LEG_Tp) + T_theta_diff, left_T);
-  right_leg_state.vmc->leg_conv(F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, right_T);
+  if (jump_open_loop)
+  {
+    // Joint order: rear (hip), front (knee). Direct effort commands in N*m.
+    left_T[0] = right_T[0] = -30.0;
+    left_T[1] = right_T[1] = 30.0;
+  }
+  else
+  {
+    left_leg_state.vmc->leg_conv(F_leg[LEFT], u_left(LEG_Tp) + T_theta_diff, left_T);
+    right_leg_state.vmc->leg_conv(F_leg[RIGHT], u_right(LEG_Tp) - T_theta_diff, right_T);
+  }
   double left_wheel_cmd = unstick_flag ? 0. : u_left(WHEEL_T) - T_yaw - T_wheel_diff;
   double right_wheel_cmd = unstick_flag ? 0. : u_right(WHEEL_T) + T_yaw - T_wheel_diff;
   LegCommand left_cmd = { F_leg[LEFT], u_left(LEG_Tp) + T_theta_diff, { left_T[0], left_T[1] } },
@@ -422,36 +383,24 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   setJointCommands(joint_handles_, left_cmd, right_cmd, left_wheel_cmd, right_wheel_cmd);
 }
 
-double Normal::calculateSupportForce(int leg, double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
+double Normal::calculateSupportForce(double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
                                      Eigen::Matrix<double, STATE_DIM, 1> x,
                                      const std::shared_ptr<ModelParams>& model_params, const ros::Duration& period)
 {
-  auto& history = support_force_history_[leg];
-  const double dt = period.toSec();
-  const double P = F * cos(x(0)) + Tp * sin(x(0)) / leg_length;
-  if (!(dt > 0.0))
-    return model_params->m_w * model_params->g + P;
-  if (!history.initialized)
-  {
-    history.initialized = true;
-    history.ddot_zM = acc_z - model_params->g;
-    history.dot_theta = x(1);
-    for (double& speed : history.leg_len_spd)
-      speed = leg_len_spd;
-  }
-  auto& d_leg_len = history.leg_len_spd;
+  static double last_ddot_zM = acc_z - model_params->g, last_dot_theta = x(1),
+                last_ddot_theta = (x(1) - last_dot_theta) / period.toSec(), last_ddot_leg_len, d_leg_len[3]{};
   d_leg_len[0] = d_leg_len[1];
   d_leg_len[1] = d_leg_len[2];
   d_leg_len[2] = leg_len_spd;
 
-  // Maintain independent derivative/filter history for each leg.
-  double ddot_zM = 0.3 * (acc_z - model_params->g) + 0.7 * history.ddot_zM;
-  double ddot_theta = 0.3 * ((x(1) - history.dot_theta) / dt) + 0.7 * history.ddot_theta;
-  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / (2.0 * dt) + 0.7 * history.ddot_leg_len;
-  history.ddot_zM = ddot_zM;
-  history.dot_theta = x(1);
-  history.ddot_theta = ddot_theta;
-  history.ddot_leg_len = ddot_leg_len;
+  double P = F * cos(x(0)) + Tp * sin(x(0)) / leg_length;
+  // lp filter
+  double ddot_zM = 0.3 * (acc_z - model_params->g) + 0.7 * last_ddot_zM;
+  double ddot_theta = 0.3 * ((x(1) - last_dot_theta) / period.toSec()) + 0.7 * last_ddot_theta;
+  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / 2 * period.toSec() + 0.7 * last_ddot_leg_len;
+  last_dot_theta = x(1);
+  last_ddot_theta = ddot_theta;
+  last_ddot_leg_len = ddot_leg_len;
   double ddot_zw = ddot_zM - ddot_leg_len * cos(x(0)) + 2 * leg_len_spd * x(1) * sin(x(0)) +
                    +leg_length * (ddot_theta * sin(x(0)) + leg_length * x(1) * x(1) * cos(x(0)));
   double Fn = model_params->m_w * ddot_zw + model_params->m_w * model_params->g + P;
@@ -459,15 +408,37 @@ double Normal::calculateSupportForce(int leg, double F, double Tp, double leg_le
   return Fn;
 }
 
-bool Normal::unstickDetection(int leg, const double& F_leg, const double& Tp, const double& leg_len_spd,
+bool Normal::unstickDetection(const double& F_leg, const double& Tp, const double& leg_len_spd,
                               const double& leg_length, const double& acc_z,
                               const std::shared_ptr<ModelParams>& model_params, Eigen::Matrix<double, STATE_DIM, 1> x,
                               const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr,
                               const ros::Duration& period)
 {
-  double Fn = calculateSupportForce(leg, F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, period);
+  static bool maybeChange = false, last_unstick_ = false;
+  static ros::Time judgeTime;
+  double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, period);
   supportForceAveragePtr->input(Fn);
-  // Landing debounce belongs to jump_contact_detector_; normal unstick stays immediate.
-  return supportForceAveragePtr->output() < unstick_threshold;
+  bool unstick_ = supportForceAveragePtr->output() < unstick_threshold;
+
+  if (unstick_ != last_unstick_)
+  {
+    if (!maybeChange)
+    {
+      judgeTime = ros::Time::now();
+      maybeChange = true;
+    }
+    else
+    {
+      if (ros::Time::now() - judgeTime > ros::Duration(0.1))
+      {
+        last_unstick_ = unstick_;
+      }
+    }
+  }
+  else
+  {
+    maybeChange = false;
+  }
+  return unstick_;
 }
 }  // namespace rm_chassis_controllers
