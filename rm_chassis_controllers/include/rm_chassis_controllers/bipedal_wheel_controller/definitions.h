@@ -88,7 +88,7 @@ struct LegCommand
   double input[2];  // input
 };
 
-enum LegOrientation
+enum LegOrientation 
 {
   UNDER,
   FRONT,

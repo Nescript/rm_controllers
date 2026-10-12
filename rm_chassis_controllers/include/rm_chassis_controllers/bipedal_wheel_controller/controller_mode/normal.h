@@ -48,10 +48,10 @@ private:
   ros::Time lastJumpTime_{};
   ros::Time off_ground_start_time_{};
 
-  double pos_des_{ 0.0 }, leg_length_des{ 0.2 };
+  double pos_des_{ 0.0 }, desired_leg_length{ 0.2 };
   double unstick_threshold{ 15.0 };
   int jump_phase_ = JumpPhase::IDLE, jumpTime_{ 0 };
-  bool x_offset_flag_{ false }, protect_flag_{ false };
+  bool pos_offset_flag_{ false }, protect_flag_{ false };
   VEL_DIRECTION vel_direction_{ VEL_DIRECTION::POSITIVE };
   std::shared_ptr<MovingAverageFilter<double>> leftSupportForceAveragePtr_, rightSupportForceAveragePtr_;
 };
