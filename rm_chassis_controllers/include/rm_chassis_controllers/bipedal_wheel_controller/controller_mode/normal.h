@@ -6,11 +6,16 @@
 
 #include <hardware_interface/joint_command_interface.h>
 #include <control_toolbox/pid.h>
+#include <cstdint>
+#include <vector>
+#include <memory>
+#include <ros/time.h>
 
 #include "rm_common/filters/filters.h"
 
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
 #include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/controller_interface.h"
 
 namespace rm_chassis_controllers
 {
@@ -28,7 +33,7 @@ public:
   }
 
 private:
-  typedef enum
+  typedef enum : std::int8_t
   {
     POSITIVE = -1,
     NEGATIVE = 1

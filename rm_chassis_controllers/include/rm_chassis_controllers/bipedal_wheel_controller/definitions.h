@@ -5,6 +5,9 @@
 #pragma once
 
 #include "bipedal_wheel_controller/vmc/VMC.h"
+
+#include <Eigen/Core>
+#include <geometry_msgs/Vector3.h>
 #include <array>
 #include <cstdint>
 #include <utility>
@@ -88,7 +91,7 @@ struct LegCommand
   double input[2];  // input
 };
 
-enum LegOrientation 
+enum LegOrientation : std::uint8_t
 {
   UNDER,
   FRONT,
@@ -103,7 +106,7 @@ enum JumpPhase : std::uint8_t
   IDLE,
 };
 
-enum BalanceMode
+enum BalanceMode : std::uint8_t
 {
   NORMAL,
   STAND_UP,
@@ -113,26 +116,26 @@ enum BalanceMode
   PROTECT
 };
 
-enum Side
+enum Side : std::uint8_t
 {
   LEFT = 0,
   RIGHT,
 };
 
-enum
+enum : std::uint8_t
 {
-  WHEEL_T = 0,
-  LEG_Tp,
+  WHEEL_TORQUE = 0,
+  LEG_TORQUE,
 };
 
-enum
+enum : std::uint8_t
 {
-  THETA = 0,
-  D_THETA,
-  POS,
-  VEL,
-  PITCH,
-  D_PITCH,
+  LEG_THETA = 0,
+  LEG_THETA_DOT,
+  CHASSIS_POS,
+  CHASSIS_VEL,
+  CHASSIS_PITCH,
+  CHASSIS_PITCH_DOT,
 };
 
 struct LegState
@@ -155,7 +158,7 @@ struct ChassisState
   double yaw_total_last = 0.0;
 };
 
-constexpr std::array<std::pair<JumpPhase, const double>, 3> jumpLengthDes = {
+constexpr std::array<std::pair<JumpPhase, const double>, 3> JUMP_PHASE_LEG_LENGTHS = {
   { { JumpPhase::LEG_RETRACTION, 0.11 }, { JumpPhase::JUMP_UP, 0.34 }, { JumpPhase::OFF_GROUND, 0.11 } }
 };
 }  // namespace rm_chassis_controllers
