@@ -10,6 +10,8 @@
 #include <vector>
 #include <memory>
 #include <ros/time.h>
+#include <ros/duration.h>
+#include <Eigen/Dense>
 
 #include "rm_common/filters/filters.h"
 
@@ -39,12 +41,14 @@ private:
     NEGATIVE = 1
   } VEL_DIRECTION;
 
-  double calculateSupportForce(double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
-                               Eigen::Matrix<double, STATE_DIM, 1> x, const std::shared_ptr<ModelParams>& model_params,
+  double calculateSupportForce(double F, double Tp, double leg_length, 
+                               const double& leg_len_spd, double acc_z,
+                               const Eigen::Matrix<double, STATE_DIM, 1>& state, 
+                               const std::shared_ptr<ModelParams>& model_params,
                                const ros::Duration& period);
   bool unstickDetection(const double& F_leg, const double& Tp, const double& leg_len_spd, const double& leg_length,
                         const double& acc_z, const std::shared_ptr<ModelParams>& model_params,
-                        Eigen::Matrix<double, STATE_DIM, 1> x,
+                        const Eigen::Matrix<double, STATE_DIM, 1>& state,
                         const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr,
                         const ros::Duration& period);
   std::vector<hardware_interface::JointHandle*> joint_handles_;

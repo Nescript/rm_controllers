@@ -7,11 +7,13 @@
 #include <angles/angles.h>
 #include <memory>
 #include <vector>
-#include <math.h>
+#include <cmath>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <control_toolbox/pid.h>
 #include <geometry_msgs/Quaternion.h>
 #include <hardware_interface/joint_command_interface.h>
+#include <stdexcept>
 
 #include "bipedal_wheel_controller/dynamics/gen_A.h"
 #include "bipedal_wheel_controller/dynamics/gen_B.h"
@@ -46,11 +48,12 @@ static inline double get_theta_leg_offset(const double& l)
 inline void generateAB(const std::shared_ptr<ModelParams>& model_params, Eigen::Matrix<double, STATE_DIM, STATE_DIM>& a,
                        Eigen::Matrix<double, STATE_DIM, CONTROL_DIM>& b, double leg_length)
 {
+  // NOLINTNEXTLINE(readability-identifier-naming)
   double A[36] = { 0. }, B[12]{ 0. };
   //  double L = leg_length * model_params->L_weight;
   //  double Lm = leg_length * model_params->Lm_weight;
-  double Lm = get_LM(leg_length);
-  double L = leg_length - Lm;
+  double l_m = get_LM(leg_length);
+  double l = leg_length - l_m;
   double i_p = get_i_p(leg_length);
 
   //  auto theta_from_length = [](double L) -> double {
@@ -67,9 +70,9 @@ inline void generateAB(const std::shared_ptr<ModelParams>& model_params, Eigen::
   //  gen_B(model_params->i_m, model_params->i_p, model_params->i_w, L, Lm, model_params->M, model_params->r,
   //        model_params->l, model_params->m_p, model_params->m_w, B);
 
-  gen_A(model_params->i_m, i_p, model_params->i_w, L, Lm, model_params->M, model_params->r, model_params->g,
+  gen_A(model_params->i_m, i_p, model_params->i_w, l, l_m, model_params->M, model_params->r, model_params->g,
         model_params->l, model_params->m_p, model_params->m_w, A);
-  gen_B(model_params->i_m, i_p, model_params->i_w, L, Lm, model_params->M, model_params->r, model_params->l,
+  gen_B(model_params->i_m, i_p, model_params->i_w, l, l_m, model_params->M, model_params->r, model_params->l,
         model_params->m_p, model_params->m_w, B);
 
   // clang-format off

@@ -5,6 +5,22 @@
 #include "bipedal_wheel_controller/controller_mode/normal.h"
 #include "bipedal_wheel_controller/controller.h"
 #include "bipedal_wheel_controller/helper_functions.h"
+#include "bipedal_wheel_controller/controller_mode/mode_base.h"
+#include "bipedal_wheel_controller/controller_interface.h"
+#include "bipedal_wheel_controller/definitions.h"
+#include "hardware_interface/joint_command_interface.h"
+#include "rm_common/filters/filters.h"
+#include "rm_msgs/ChassisCmd.h"
+
+#include <ros/time.h>
+#include <ros/duration.h>
+#include <control_toolbox/pid.h>
+#include <ros/console.h>
+#include <Eigen/Dense>
+
+#include <cmath>
+#include <vector>
+#include <memory>
 
 namespace rm_chassis_controllers
 {
@@ -188,8 +204,8 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   double right_turn_compensation_force =
       model_params->M * friction_circle * right_pos.L0 / controller->getChassisGeometryParams()->wheel_track;
   double left_pid_force{}, right_pid_force{}, wheel_deff_torque{};
-  Eigen::Matrix<double, 2, 1> leg_force;
-  leg_force.setZero();
+  Eigen::Matrix<double, 2, 1> leg_axial_force;
+  leg_axial_force.setZero();
   // check jump
   if (jump_phase_ == JumpPhase::IDLE &&
       ros::Time::now() - lastJumpTime_ > ros::Duration(control_params->jumpOverTime_) && controller->getJumpCmd())
@@ -212,8 +228,8 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     right_pid_force = pid_legs_[RIGHT]->computeCommand(right_length_des - current_leg_length, period);
     left_pid_force = abs(left_pid_force) > 150 ? std::copysign(1, left_pid_force) * 150 : left_pid_force;
     right_pid_force = abs(right_pid_force) > 150 ? std::copysign(1, right_pid_force) * 150 : right_pid_force;
-    leg_force[LEFT] = left_pid_force - left_turn_compensation_force + gravity / cos(left_pos.theta) + roll_force - left_spring_force;
-    leg_force[RIGHT] = right_pid_force + right_turn_compensation_force + gravity / cos(right_pos.theta) - roll_force - right_spring_force;
+    leg_axial_force[LEFT] = left_pid_force - left_turn_compensation_force + gravity / cos(left_pos.theta) + roll_force - left_spring_force;
+    leg_axial_force[RIGHT] = right_pid_force + right_turn_compensation_force + gravity / cos(right_pos.theta) - roll_force - right_spring_force;
     wheel_deff_torque = controller->getBaseState() == rm_msgs::ChassisCmd::RAW ?
                        std::copysign(1, vel_cmd.z) * (pid_wheel_vel_diff_->computeCommand(wheel_vel_diff, period)) :
                        0.0f;
@@ -228,9 +244,9 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
       case JumpPhase::LEG_RETRACTION:
       {
         ROS_INFO("[balance] ENTER LEG_RETRACTION");
-        leg_force(LEFT) = pid_legs_[LEFT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
+        leg_axial_force(LEFT) = pid_legs_[LEFT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
                       gravity / cos(left_pos.theta) + roll_force - left_spring_force;
-        leg_force(RIGHT) = pid_legs_[RIGHT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
+        leg_axial_force(RIGHT) = pid_legs_[RIGHT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
                        gravity / cos(right_pos.theta) - roll_force - right_spring_force;
         if (current_leg_length < desired_leg_length + 0.02f)
         {
@@ -244,10 +260,10 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         break;
       }
       case JumpPhase::JUMP_UP:
-        leg_force(LEFT) = control_params->jump_up_force *
+        leg_axial_force(LEFT) = control_params->jump_up_force *
                             (1 - 3 * pow(s_left, 2) + 
                             2 * pow(s_left, 3)) + gravity;
-        leg_force(RIGHT) = control_params->jump_up_force *
+        leg_axial_force(RIGHT) = control_params->jump_up_force *
                             (1 - 3 * pow(s_right, 2) + 
                             2 * pow(s_right, 3)) + gravity;
         ROS_INFO("[balance] ENTER JUMP_UP");
@@ -267,9 +283,9 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         {
           const double s_left_flip = 1 - s_left;
           const double s_right_flip = 1 - s_right;
-          leg_force(LEFT) = -control_params->off_ground_force * (1 - 3 * pow(s_left_flip, 2) + 2 * pow(s_left_flip, 3)) -
+          leg_axial_force(LEFT) = -control_params->off_ground_force * (1 - 3 * pow(s_left_flip, 2) + 2 * pow(s_left_flip, 3)) -
                         left_spring_force;
-          leg_force(RIGHT) = -control_params->off_ground_force * (1 - 3 * pow(s_right_flip, 2) + 2 * pow(s_right_flip, 3)) -
+          leg_axial_force(RIGHT) = -control_params->off_ground_force * (1 - 3 * pow(s_right_flip, 2) + 2 * pow(s_right_flip, 3)) -
                          right_spring_force;
         }
         else
@@ -310,10 +326,10 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   unstick[1] = right_unstick;
   last_left_unstick = left_unstick;
   last_right_unstick = right_unstick;
-  Matrix<double, 2, 1> F_N{};
-  F_N(LEFT) = leftSupportForceAveragePtr_->output();
-  F_N(RIGHT) = rightSupportForceAveragePtr_->output();
-  controller->pubLQRStatus(-left_state, -right_state, left_reference_state, right_reference_state, left_control_input, right_control_input, F_N, unstick);
+  Matrix<double, 2, 1> leg_support_force{};
+  leg_support_force(LEFT) = leftSupportForceAveragePtr_->output();
+  leg_support_force(RIGHT) = rightSupportForceAveragePtr_->output();
+  controller->pubLQRStatus(-left_state, -right_state, left_reference_state, right_reference_state, left_control_input, right_control_input, leg_support_force, unstick);
 
   updateUnstick(left_unstick, right_unstick);
   //  left_unstick = right_unstick = false;
@@ -328,13 +344,13 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   // Control
   double left_motor_torque[2], right_motor_torque[2];
   
-  left_leg_state.vmc->leg_conv(leg_force[LEFT], left_control_input(LEG_TORQUE) + theta_diff_torque, left_motor_torque);
-  right_leg_state.vmc->leg_conv(leg_force[RIGHT], right_control_input(LEG_TORQUE) - theta_diff_torque, right_motor_torque);
+  left_leg_state.vmc->leg_conv(leg_axial_force[LEFT], left_control_input(LEG_TORQUE) + theta_diff_torque, left_motor_torque);
+  right_leg_state.vmc->leg_conv(leg_axial_force[RIGHT], right_control_input(LEG_TORQUE) - theta_diff_torque, right_motor_torque);
   
   double left_wheel_cmd = unstick_flag ? 0. : left_control_input(WHEEL_TORQUE) - yaw_torque - wheel_deff_torque;
   double right_wheel_cmd = unstick_flag ? 0. : right_control_input(WHEEL_TORQUE) + yaw_torque - wheel_deff_torque;
-  LegCommand left_cmd = { leg_force[LEFT], left_control_input(LEG_TORQUE) + theta_diff_torque, { left_motor_torque[0], left_motor_torque[1] } },
-             right_cmd = { leg_force[RIGHT], right_control_input(LEG_TORQUE) - theta_diff_torque, { right_motor_torque[0], right_motor_torque[1] } };
+  LegCommand left_cmd = { leg_axial_force[LEFT], left_control_input(LEG_TORQUE) + theta_diff_torque, { left_motor_torque[0], left_motor_torque[1] } },
+             right_cmd = { leg_axial_force[RIGHT], right_control_input(LEG_TORQUE) - theta_diff_torque, { right_motor_torque[0], right_motor_torque[1] } };
 
   // upstairs
   if (jump_phase_ == JumpPhase::IDLE && controller->getCompleteStand() && abs(left_state(0) + right_state(0)) / 2.0f > 0.50 &&
@@ -390,62 +406,70 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   setJointCommands(joint_handles_, left_cmd, right_cmd, left_wheel_cmd, right_wheel_cmd);
 }
 
-double Normal::calculateSupportForce(double F, double Tp, double leg_length, const double& leg_len_spd, double acc_z,
-                                     Eigen::Matrix<double, STATE_DIM, 1> x,
+// TODO replace state with specific param in state
+double Normal::calculateSupportForce(double leg_axial_force, double leg_angle_torque, double leg_length, 
+                                     const double& leg_length_dot, double acc_z,
+                                     const Eigen::Matrix<double, STATE_DIM, 1>& state,
                                      const std::shared_ptr<ModelParams>& model_params, const ros::Duration& period)
 {
-  static double last_ddot_zM = acc_z - model_params->g, last_dot_theta = x(1),
-                last_ddot_theta = (x(1) - last_dot_theta) / period.toSec(), last_ddot_leg_len, d_leg_len[3]{};
-  d_leg_len[0] = d_leg_len[1];
-  d_leg_len[1] = d_leg_len[2];
-  d_leg_len[2] = leg_len_spd;
+  static double last_chassis_height_ddot = acc_z - model_params->g, 
+                last_leg_theta_dot = state(1),
+                last_leg_theta_ddot = (state(1) - last_leg_theta_dot) / period.toSec(), 
+                last_ddot_leg_len, 
+                leg_length_dot_history[3]{};
+  leg_length_dot_history[0] = leg_length_dot_history[1];
+  leg_length_dot_history[1] = leg_length_dot_history[2];
+  leg_length_dot_history[2] = leg_length_dot;
 
-  double P = F * cos(x(0)) + Tp * sin(x(0)) / leg_length;
+  double leg_vertical_force = leg_axial_force * cos(state(0)) + leg_angle_torque * sin(state(0)) / leg_length;
   // lp filter
-  double ddot_zM = 0.3 * (acc_z - model_params->g) + 0.7 * last_ddot_zM;
-  double ddot_theta = 0.3 * ((x(1) - last_dot_theta) / period.toSec()) + 0.7 * last_ddot_theta;
-  double ddot_leg_len = 0.3 * (d_leg_len[2] - d_leg_len[0]) / 2 * period.toSec() + 0.7 * last_ddot_leg_len;
-  last_dot_theta = x(1);
-  last_ddot_theta = ddot_theta;
-  last_ddot_leg_len = ddot_leg_len;
-  double ddot_zw = ddot_zM - ddot_leg_len * cos(x(0)) + 2 * leg_len_spd * x(1) * sin(x(0)) +
-                   +leg_length * (ddot_theta * sin(x(0)) + leg_length * x(1) * x(1) * cos(x(0)));
-  double Fn = model_params->m_w * ddot_zw + model_params->m_w * model_params->g + P;
+  double chassis_height_ddot = 0.3 * (acc_z - model_params->g) + 0.7 * last_chassis_height_ddot;
+  double leg_theta_ddot = 0.3 * ((state(1) - last_leg_theta_dot) / period.toSec()) + 0.7 * last_leg_theta_ddot;
+  double leg_length_ddot = 0.3 * (leg_length_dot_history[2] - leg_length_dot_history[0]) / 2 * period.toSec() + 0.7 * last_ddot_leg_len;
+  last_leg_theta_dot = state(1);
+  last_leg_theta_ddot = leg_theta_ddot;
+  last_ddot_leg_len = leg_length_ddot;
+  double wheel_height_ddot = chassis_height_ddot - leg_length_ddot * cos(state(0)) + 2 * leg_length_dot * state(1) * sin(state(0)) +
+                   +leg_length * (leg_theta_ddot * sin(state(0)) + leg_length * state(1) * state(1) * cos(state(0)));
+  double support_force = model_params->m_w * wheel_height_ddot + model_params->m_w * model_params->g + leg_vertical_force;
 
-  return Fn;
+  return support_force;
 }
 
-bool Normal::unstickDetection(const double& F_leg, const double& Tp, const double& leg_len_spd,
+
+// TODO apply last unstick flag
+bool Normal::unstickDetection(const double& leg_axial_force, const double& leg_angle_torque, const double& leg_length_dot,
                               const double& leg_length, const double& acc_z,
-                              const std::shared_ptr<ModelParams>& model_params, Eigen::Matrix<double, STATE_DIM, 1> x,
+                              const std::shared_ptr<ModelParams>& model_params, 
+                              const Eigen::Matrix<double, STATE_DIM, 1>& state,
                               const std::shared_ptr<MovingAverageFilter<double>>& supportForceAveragePtr,
                               const ros::Duration& period)
 {
-  static bool maybeChange = false, last_unstick_ = false;
-  static ros::Time judgeTime;
-  double Fn = calculateSupportForce(F_leg, Tp, leg_length, leg_len_spd, acc_z, x, model_params, period);
-  supportForceAveragePtr->input(Fn);
-  bool unstick_ = supportForceAveragePtr->output() < unstick_threshold;
+  static bool maybe_change = false, last_unstick_flag = false;
+  static ros::Time judge_time;
+  double support_force = calculateSupportForce(leg_axial_force, leg_angle_torque, leg_length, leg_length_dot, acc_z, state, model_params, period);
+  supportForceAveragePtr->input(support_force);
+  bool unstick_flag = supportForceAveragePtr->output() < unstick_threshold;
 
-  if (unstick_ != last_unstick_)
+  if (unstick_flag != last_unstick_flag)
   {
-    if (!maybeChange)
+    if (!maybe_change)
     {
-      judgeTime = ros::Time::now();
-      maybeChange = true;
+      judge_time = ros::Time::now();
+      maybe_change = true;
     }
     else
     {
-      if (ros::Time::now() - judgeTime > ros::Duration(0.1))
+      if (ros::Time::now() - judge_time > ros::Duration(0.1))
       {
-        last_unstick_ = unstick_;
+        last_unstick_flag = unstick_flag;
       }
     }
   }
   else
   {
-    maybeChange = false;
+    maybe_change = false;
   }
-  return unstick_;
+  return unstick_flag;
 }
 }  // namespace rm_chassis_controllers

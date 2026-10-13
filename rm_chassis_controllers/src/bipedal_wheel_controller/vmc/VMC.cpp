@@ -1,7 +1,7 @@
 //
 // Created by wk on 2026/2/25.
 //
-
+// NOLINTBEGIN(readability-identifier-naming)
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include <math.h>
 
@@ -273,3 +273,4 @@ void VMC::leg_conv_t(double T1, double T2)
   //  force_real_.Tp = inv_Jt[1][0] * T1 + inv_Jt[1][1] * T2;  // Tp
 }
 }  // namespace rm_chassis_controllers
+// NOLINTEND(readability-identifier-naming)
