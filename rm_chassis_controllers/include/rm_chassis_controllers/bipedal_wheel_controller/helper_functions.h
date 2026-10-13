@@ -5,7 +5,6 @@
 #pragma once
 
 #include <angles/angles.h>
-#include <cstddef>
 #include <memory>
 #include <vector>
 #include <math.h>

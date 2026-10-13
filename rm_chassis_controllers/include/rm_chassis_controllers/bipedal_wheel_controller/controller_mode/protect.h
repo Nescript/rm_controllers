@@ -9,7 +9,6 @@
 #include <rm_common/filters/filters.h>
 
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
-#include "bipedal_wheel_controller/definitions.h"
 
 namespace rm_chassis_controllers
 {

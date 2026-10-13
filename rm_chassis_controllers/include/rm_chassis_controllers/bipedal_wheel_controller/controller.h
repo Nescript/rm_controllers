@@ -24,15 +24,12 @@
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
 #include <atomic>
-#include <limits>
 #include "rm_chassis_controllers/chassis_base.h"
 #include <dynamic_reconfigure/server.h>
 #include <rm_chassis_controllers/LQRWeightConfig.h>
 
-#include "bipedal_wheel_controller/helper_functions.h"
 #include "bipedal_wheel_controller/definitions.h"
 #include "bipedal_wheel_controller/controller_mode/mode_manager.h"
-#include "bipedal_wheel_controller/vmc/VMC.h"
 #include "bipedal_wheel_controller/controller_interface.h"
 
 namespace rm_chassis_controllers

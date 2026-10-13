@@ -3,7 +3,8 @@
 //
 
 #include "bipedal_wheel_controller/controller_mode/sit_down.h"
-#include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/helper_functions.h"
+#include <rm_msgs/ChassisCmd.h>
 
 namespace rm_chassis_controllers
 {

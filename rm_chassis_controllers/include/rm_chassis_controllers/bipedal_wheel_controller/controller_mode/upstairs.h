@@ -6,8 +6,6 @@
 #include <hardware_interface/joint_command_interface.h>
 #include <control_toolbox/pid.h>
 
-#include "rm_common/filters/filters.h"
-
 #include "bipedal_wheel_controller/controller_mode/mode_base.h"
 #include "bipedal_wheel_controller/definitions.h"
 #include "bipedal_wheel_controller/vmc/VMC.h"

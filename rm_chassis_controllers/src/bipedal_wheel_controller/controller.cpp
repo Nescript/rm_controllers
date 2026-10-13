@@ -3,6 +3,7 @@
 //
 
 #include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/helper_functions.h"
 
 #include <angles/angles.h>
 #include <geometry_msgs/Quaternion.h>

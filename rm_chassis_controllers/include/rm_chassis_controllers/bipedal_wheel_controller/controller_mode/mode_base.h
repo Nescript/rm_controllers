@@ -9,7 +9,6 @@
 #include <geometry_msgs/Vector3.h>
 #include <angles/angles.h>
 
-#include "bipedal_wheel_controller/definitions.h"
 #include "bipedal_wheel_controller/controller_interface.h"
 
 namespace rm_chassis_controllers

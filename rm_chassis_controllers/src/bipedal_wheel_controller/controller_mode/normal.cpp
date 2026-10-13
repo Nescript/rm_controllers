@@ -4,6 +4,7 @@
 
 #include "bipedal_wheel_controller/controller_mode/normal.h"
 #include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/helper_functions.h"
 
 namespace rm_chassis_controllers
 {

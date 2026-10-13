@@ -5,7 +5,6 @@
 #include <Eigen/Dense>
 #include <geometry_msgs/Vector3.h>
 #include "bipedal_wheel_controller/definitions.h"
-#include "bipedal_wheel_controller/vmc/VMC.h"
 
 namespace rm_chassis_controllers
 {
