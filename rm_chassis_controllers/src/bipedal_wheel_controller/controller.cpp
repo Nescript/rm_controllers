@@ -12,6 +12,8 @@
 #include <pluginlib/class_list_macros.hpp>
 #include <unsupported/Eigen/MatrixFunctions>
 
+#include <cmath>
+
 namespace rm_chassis_controllers
 {
 bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh,
@@ -68,7 +70,7 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   leg_state_[RIGHT].x.setZero();
 
   // Slippage detection
-  A_ << 1, 0.001f, 0, 1;
+  A_.setIdentity();
   H_ << 1, 0, 0, 1;
   Q_ << 1, 0, 0, 1;
   R_ << 200, 0, 0, 200;
@@ -86,6 +88,14 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
       controller_nh.advertiseService("/down_5cm_stair", &BipedalController::down5cmStairSrvCallback, this);
   debugPub_ = std::make_shared<DebugDataPublisher>(controller_nh, "debug_data");
   return true;
+}
+
+void BipedalController::starting(const ros::Time& time)
+{
+  ChassisBase::starting(time);
+  filtered_acc_forward_ = 0.0;
+  acc_forward_initialized_ = false;
+  itor = 0;
 }
 
 bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
@@ -218,14 +228,25 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
                           right_spd.dL0 * sin(right_pos.theta + pitch);
 
   double wheel_vel_aver = (leftWheelVelAbsolute + rightWheelVelAbsolute) / 2.;
+  // Match the wheel speed's horizontal forward direction; gravity remains on the world Z axis.
+  const double acc_forward = std::cos(yaw) * linear_acc_world.x + std::sin(yaw) * linear_acc_world.y;
+  A_(0, 1) = period.toSec();
+  kalmanFilterPtr_->setStateTransition(A_);
   R_(0, 0) = slip_flag_ ? slip_R_wheel_ : R_wheel_;
   if (itor >= sample_times_)
   {  // oversampling
-    static double last_linear_acc_world_x = linear_acc_world.x;
     itor = 0;
+    if (!acc_forward_initialized_)
+    {
+      filtered_acc_forward_ = acc_forward;
+      acc_forward_initialized_ = true;
+    }
+    else
+    {
+      filtered_acc_forward_ = 0.2 * filtered_acc_forward_ + 0.8 * acc_forward;
+    }
     X_(0) = wheel_vel_aver;
-    X_(1) = 0.2 * last_linear_acc_world_x + 0.8 * linear_acc_world.x;
-    last_linear_acc_world_x = X_(1);
+    X_(1) = filtered_acc_forward_;
     kalmanFilterPtr_->predict(U_);
     kalmanFilterPtr_->update(X_, R_);
   }
