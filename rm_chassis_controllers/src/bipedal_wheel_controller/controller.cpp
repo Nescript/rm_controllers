@@ -153,8 +153,6 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     odom2base = odom2imu * imu2base;
     quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
 
-    // IMU orientation rotates sensor-frame acceleration into the world reference frame.
-    // Keep the accelerometer gravity response; no gravity compensation is applied here.
     tf_msg.transform = tf2::toMsg(odom2imu);
     tf_msg.header.stamp = time;
     tf2::doTransform(acc, linear_acc_world, tf_msg);
@@ -220,7 +218,6 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
                           right_spd.dL0 * sin(right_pos.theta + pitch);
 
   double wheel_vel_aver = (leftWheelVelAbsolute + rightWheelVelAbsolute) / 2.;
-  // Match the wheel speed's horizontal forward direction; gravity remains on the world Z axis.
   const double acc_forward = std::cos(yaw) * linear_acc_world.x + std::sin(yaw) * linear_acc_world.y;
   R_(0, 0) = slip_flag_ ? slip_R_wheel_ : R_wheel_;
   if (itor >= sample_times_)
