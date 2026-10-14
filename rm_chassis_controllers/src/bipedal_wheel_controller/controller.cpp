@@ -90,14 +90,6 @@ bool BipedalController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
   return true;
 }
 
-void BipedalController::starting(const ros::Time& time)
-{
-  ChassisBase::starting(time);
-  filtered_acc_forward_ = 0.0;
-  acc_forward_initialized_ = false;
-  itor = 0;
-}
-
 bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
 {
   (void)req;
@@ -233,18 +225,11 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   R_(0, 0) = slip_flag_ ? slip_R_wheel_ : R_wheel_;
   if (itor >= sample_times_)
   {  // oversampling
+    static double last_acc_forward = acc_forward;
     itor = 0;
-    if (!acc_forward_initialized_)
-    {
-      filtered_acc_forward_ = acc_forward;
-      acc_forward_initialized_ = true;
-    }
-    else
-    {
-      filtered_acc_forward_ = 0.2 * filtered_acc_forward_ + 0.8 * acc_forward;
-    }
     X_(0) = wheel_vel_aver;
-    X_(1) = filtered_acc_forward_;
+    X_(1) = 0.2 * last_acc_forward + 0.8 * acc_forward;
+    last_acc_forward = X_(1);
     kalmanFilterPtr_->predict(U_);
     kalmanFilterPtr_->update(X_, R_);
   }
