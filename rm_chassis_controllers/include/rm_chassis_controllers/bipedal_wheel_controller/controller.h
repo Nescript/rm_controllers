@@ -49,7 +49,6 @@ class BipedalController : public ChassisBase<rm_control::RobotStateInterface, ha
 public:
   BipedalController() = default;
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh) override;
-  void starting(const ros::Time& time) override;
   void moveJoint(const ros::Time& time, const ros::Duration& period) override;
   void stopping(const ros::Time& time) override;
   // clang-format off
@@ -133,8 +132,6 @@ private:
       slip_R_wheel_{}, R_wheel_{};
   int itor = 0, sample_times_ = 0;
   bool slip_flag_{ false };
-  double filtered_acc_forward_{ 0.0 };
-  bool acc_forward_initialized_{ false };
   Eigen::Matrix<double, 2, 2> A_, B_, H_, Q_, R_;
   Eigen::Matrix<double, 2, 1> X_, U_;
   std::shared_ptr<KalmanFilter<double>> kalmanFilterPtr_;
