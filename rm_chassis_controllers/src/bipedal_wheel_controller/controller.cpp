@@ -132,7 +132,7 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   acc.y = imu_handle_.getLinearAcceleration()[1];
   acc.z = imu_handle_.getLinearAcceleration()[2];
   tf2::Transform odom2imu, imu2base, odom2base;
-  geometry_msgs::Vector3 angular_vel_base{}, linear_acc_base{};
+  geometry_msgs::Vector3 angular_vel_base{}, linear_acc_world{};
   double roll{}, pitch{}, yaw{};
   try
   {
@@ -151,16 +151,18 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     odom2base = odom2imu * imu2base;
     quatToRPY(toMsg(odom2base).rotation, roll, pitch, yaw);
 
-    tf_msg.transform = tf2::toMsg(odom2imu.inverse());
+    // IMU orientation rotates sensor-frame acceleration into the world reference frame.
+    // Keep the accelerometer gravity response; no gravity compensation is applied here.
+    tf_msg.transform = tf2::toMsg(odom2imu);
     tf_msg.header.stamp = time;
-    tf2::doTransform(acc, linear_acc_base, tf_msg);
+    tf2::doTransform(acc, linear_acc_world, tf_msg);
 
     tf2::Vector3 z_body(0, 0, 1);
     tf2::Vector3 z_world = tf2::quatRotate(odom2base.getRotation(), z_body);
     overturn_ = (abs(pitch) > 0.65 || abs(roll) > 0.8) && z_world.z() < 0.0;
 
     chassis_state_.angular_vel = angular_vel_base;
-    chassis_state_.linear_acc = linear_acc_base;
+    chassis_state_.linear_acc = linear_acc_world;
     chassis_state_.roll = roll;
     chassis_state_.pitch = pitch;
     chassis_state_.yaw = yaw;
@@ -219,11 +221,11 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
   R_(0, 0) = slip_flag_ ? slip_R_wheel_ : R_wheel_;
   if (itor >= sample_times_)
   {  // oversampling
-    static double last_linear_acc_base_x = linear_acc_base.x;
+    static double last_linear_acc_world_x = linear_acc_world.x;
     itor = 0;
     X_(0) = wheel_vel_aver;
-    X_(1) = 0.2 * last_linear_acc_base_x + 0.8 * linear_acc_base.x;
-    last_linear_acc_base_x = X_(1);
+    X_(1) = 0.2 * last_linear_acc_world_x + 0.8 * linear_acc_world.x;
+    last_linear_acc_world_x = X_(1);
     kalmanFilterPtr_->predict(U_);
     kalmanFilterPtr_->update(X_, R_);
   }
@@ -273,9 +275,9 @@ void BipedalController::updateEstimation(const ros::Time& time, const ros::Durat
     legged_chassis_status_pub_->msg_.left_leg_theta_dot = leg_state_[LEFT].x[1];
     legged_chassis_status_pub_->msg_.right_leg_theta = leg_state_[RIGHT].x[0];
     legged_chassis_status_pub_->msg_.right_leg_theta_dot = leg_state_[RIGHT].x[1];
-    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_base.x);
-    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_base.y);
-    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_base.z);
+    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_world.x);
+    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_world.y);
+    legged_chassis_status_pub_->msg_.linear_acc_base.push_back(linear_acc_world.z);
     legged_chassis_status_pub_->unlockAndPublish();
   }
 
