@@ -194,6 +194,7 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
   right_control_input = right_lqr_gain * (-right_state);
 
   // Compute leg thrust
+  bool jump_phase_changed = false;
   auto model_params = controller->getModelParams();
   auto control_params = controller->getControlParams();
   double wheel_vel_diff = abs(joint_handles_[4]->getVelocity()) - abs(joint_handles_[5]->getVelocity());
@@ -211,6 +212,7 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
       ros::Time::now() - lastJumpTime_ > ros::Duration(control_params->jumpOverTime_) && controller->getJumpCmd())
       // 检查是否大于设定的跳跃间隔时间
   {
+    jump_phase_changed = true;
     jump_phase_ = JumpPhase::LEG_RETRACTION;
     ROS_INFO("[balance] Jump start");
 
@@ -243,7 +245,11 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
     {
       case JumpPhase::LEG_RETRACTION:
       {
-        ROS_INFO("[balance] ENTER LEG_RETRACTION");
+        if (jump_phase_changed)
+        {
+          ROS_INFO("[balance] ENTER LEG_RETRACTION");
+          jump_phase_changed = false;
+        }
         leg_axial_force(LEFT) = pid_legs_[LEFT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
                       gravity / cos(left_pos.theta) + roll_force - left_spring_force;
         leg_axial_force(RIGHT) = pid_legs_[RIGHT]->computeCommand((desired_leg_length - 0.02f) - current_leg_length, period) +
@@ -255,6 +261,7 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         if (stage_duration_time >= 10)
         {
           stage_duration_time = 0;
+          jump_phase_changed = true;
           jump_phase_ = JumpPhase::JUMP_UP;
         }
         break;
@@ -266,7 +273,11 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         leg_axial_force(RIGHT) = control_params->jump_up_force *
                             (1 - 3 * pow(s_right, 2) + 
                             2 * pow(s_right, 3)) + gravity;
-        ROS_INFO("[balance] ENTER JUMP_UP");
+        if (jump_phase_changed)
+        {
+          ROS_INFO("[balance] ENTER JUMP_UP");
+          jump_phase_changed = false;
+        }
         if (current_leg_length > desired_leg_length - 0.01f)
         {
           stage_duration_time++;
@@ -274,11 +285,17 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         if (stage_duration_time >= 4)
         {
           stage_duration_time = 0;
+          jump_phase_changed = true;
           jump_phase_ = JumpPhase::OFF_GROUND;
           off_ground_start_time_ = time;
         }
         break;
       case JumpPhase::OFF_GROUND:
+        if (jump_phase_changed)
+        {
+          ROS_INFO("[balance] ENTER OFF_GROUND");
+          jump_phase_changed = false;
+        }
         if (time - off_ground_start_time_ < ros::Duration(0.2))
         {
           const double s_left_flip = 1 - s_left;
@@ -290,6 +307,10 @@ void Normal::execute(const ros::Time& time, const ros::Duration& period)
         }
         else
         {
+          if (!jump_phase_changed) {
+            ROS_INFO("[balance] landing");
+            jump_phase_changed = true;
+          }
           desired_leg_length = 0.21;
         }
         break;
