@@ -242,8 +242,8 @@ void Normal<PidType, LoggerType, RampFilterType, MovingAverageFilterType>::execu
   //clamp(x_left(VEL), -1.1, 1.1);
   //clamp(x_right(VEL), -1.1, 1.1);
 
-  const double k_pitch = -0.1, b = 0.35;
-  double pitch_error_clamp = k_pitch * ctx.lqr_status.dx + b;
+  //const double k_pitch = -0.1, b = 0.35;
+  //double pitch_error_clamp = k_pitch * ctx.lqr_status.dx + b;
   //clamp(x_left(PITCH), -pitch_error_clamp, pitch_error_clamp);
   //clamp(x_right(PITCH), -pitch_error_clamp, pitch_error_clamp);
   //clamp(x_left(THETA), -0.6, 0.6);
